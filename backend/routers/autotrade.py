@@ -224,6 +224,15 @@ async def list_strategy_coin_autotrade():
     return {"configs": out}
 
 
+@router.get("/api/autotrade/trade-summary")
+async def trade_summary(filter: str = "all", symbol: Optional[str] = None):
+    """Gesamt-Statistik über ALLE Trades (gleiche Filter wie die Analyse-Ansicht).
+    17.11.2026: vorher rechnete das Frontend nur über die geladenen Trades."""
+    from services import trade_summary as ts
+    rows = await state.db.auto_trades.find({}, ts.FIELDS).to_list(100_000)
+    return ts.summarize(rows, filter, symbol, stale=is_stale_strategy)
+
+
 @router.get("/api/autotrade/trades")
 async def get_trades(status: str = None, limit: int = 50, mode: str = None,
                      offset: int = 0, full: bool = False):

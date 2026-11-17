@@ -235,14 +235,28 @@ def _enrich_trade(t: Dict, current_price: float = None, exchange: Dict = None) -
         "tp1_distance_pct": pct_from_entry(tp1),
         "tpf_distance_pct": pct_from_entry(tpf),
         "exit_distance_pct": pct_from_entry(float(exit_price)) if exit_price else None,
-        "rr_tp1": t.get("tp1_crv"),
-        "rr_tpf": t.get("tp_full_crv"),
+        # 17.11.2026: echtes R aus den Levels (Entry/Anfangs-SL) statt der Coin-
+        # Einstellung – bei KI-/Detektor-Levels wich das ab („TP1 (1R)“ bei 1,5 R).
+        "rr_tp1": _rr(entry, init_sl, tp1, t.get("tp1_crv")),
+        "rr_tpf": _rr(entry, init_sl, tpf, t.get("tp_full_crv")),
         "sl_moved": round(sl - init_sl, 6) if (sl and init_sl) else 0,
         "side": side,
         # Trade-Chart nur mit Bitunix-Kline (Forex: Button ausblenden)
         "chart_available": kline_available(t.get("symbol") or ""),
     }
     return t
+
+
+def _rr(entry, init_sl, tp, fallback=None):
+    """R-Vielfaches eines Ziels aus Entry und Anfangs-SL (rein); sonst Rückfallwert."""
+    try:
+        e, s, x = float(entry or 0), float(init_sl or 0), float(tp or 0)
+    except (TypeError, ValueError):
+        return fallback
+    risk = abs(e - s)
+    if e <= 0 or s <= 0 or x <= 0 or risk <= 0:
+        return fallback
+    return round(abs(x - e) / risk, 2)
 
 
 def _watch_job_task(task, jobs: Dict, job_id: str):

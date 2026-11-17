@@ -50,6 +50,9 @@ const PerformanceAnalytics = ({ performance, strategies = [], enabledIds = [], s
     return () => window.removeEventListener('ui-show-slippage', onToggle);
   }, []);
   const [closedTotal, setClosedTotal] = useState(null);
+  // Gesamt-Statistik über ALLE Trades vom Server (17.11.2026): vorher wurde nur über
+  // die geladenen Trades gerechnet – „Mehr laden“ veränderte PnL und Zähler.
+  const [summary, setSummary] = useState(null);
   const [shownClosed, setShownClosed] = useState(30);
   const [loadingMore, setLoadingMore] = useState(false);
   // Zeit-Analyse: Strategie-Filter ('' = Coin gesamt) + Ansicht (Uhrzeiten/Wochentage/Kombi)
@@ -141,6 +144,22 @@ const PerformanceAnalytics = ({ performance, strategies = [], enabledIds = [], s
     if (view === 'overview') { loadTrades(); const iv = setInterval(loadTrades, 15000); return () => clearInterval(iv); }
   }, [view, selectedCoin, timeStrategy, loadTrades]);
 
+  useEffect(() => {
+    if (view !== 'trades' && view !== 'overview') return undefined;
+    let alive = true;
+    const load = () => {
+      const q = `filter=${encodeURIComponent(pnlFilter)}${selectedCoin ? `&symbol=${encodeURIComponent(selectedCoin)}` : ''}`;
+      fetch(`${API_URL}/api/autotrade/trade-summary?${q}`).then(r => (r.ok ? r.json() : null))
+        .then(d => { if (alive) setSummary(d && d.totals ? d : null); }).catch(() => {});
+    };
+    load();
+    const iv = setInterval(load, 15000);
+    return () => { alive = false; clearInterval(iv); };
+  }, [view, pnlFilter, selectedCoin]);
+  // Server-Werte nur nutzen, wenn sie zum aktuellen Filter/Coin passen
+  const sumOk = !!(summary && summary.filter === pnlFilter
+    && (summary.coin || {}).symbol === (selectedCoin || null));
+
   // Globaler Live/Paper-Filter (obere Auswahl) für den GESAMTEN Analyse-Bereich
   // Datensammel-Trades des KI-Traders (data_collection) sind KEINE Paper-
   // Performance: 'alle' = Live + Paper (ohne Sammlung), 'paper' nur echte
@@ -218,8 +237,12 @@ const PerformanceAnalytics = ({ performance, strategies = [], enabledIds = [], s
   const coinClosedTrades = closedTrades.filter(t => t.symbol === selectedCoin);
   const coinOpenTrades = openTrades.filter(t => t.symbol === selectedCoin);
 
-  const pnlTotal = closedTrades.reduce((a, t) => a + (t.realized_pnl || 0), 0);
-  const coinPnl = coinClosedTrades.reduce((a, t) => a + (t.realized_pnl || 0), 0);
+  const pnlTotal = sumOk ? summary.totals.pnl : closedTrades.reduce((a, t) => a + (t.realized_pnl || 0), 0);
+  const coinPnl = sumOk ? summary.coin.pnl : coinClosedTrades.reduce((a, t) => a + (t.realized_pnl || 0), 0);
+  const nOpen = sumOk ? summary.totals.open : openTrades.length;
+  const nClosed = sumOk ? summary.totals.closed : closedTrades.length;
+  const nCoinOpen = sumOk ? summary.coin.open : coinOpenTrades.length;
+  const nCoinClosed = sumOk ? summary.coin.closed : coinClosedTrades.length;
 
   // Performance je Strategie für den GEWÄHLTEN COIN.
   // Wir starten mit ALLEN aktivierten Strategien (damit KI Trader garantiert
@@ -239,7 +262,15 @@ const PerformanceAnalytics = ({ performance, strategies = [], enabledIds = [], s
       alwaysShow: s.id === 'ai_trader',
     };
   });
-  [...closedTrades, ...openTrades].forEach(t => {
+  if (sumOk) {
+    // Server-Statistik über alle Trades des Coins
+    Object.values(summary.by_strategy || {}).forEach(r => {
+      const base = stratRowsMap[r.id] || { id: r.id, name: r.name, alwaysShow: r.id === 'ai_trader' };
+      stratRowsMap[r.id] = { ...base, name: base.name || stratName({ strategy_id: r.id, strategy_name: r.name }),
+        wins: r.wins, losses: r.losses, total: r.total, openCount: r.openCount, pnl: r.pnl };
+    });
+  }
+  (sumOk ? [] : [...closedTrades, ...openTrades]).forEach(t => {
     if (t.symbol !== selectedCoin) return;
     // Manuelle Trades (Bitunix-App/Website) sind keine Strategie – aus dem
     // Strategie-Vergleich ausgeblendet (User-Vorgabe)
@@ -453,8 +484,8 @@ const PerformanceAnalytics = ({ performance, strategies = [], enabledIds = [], s
                   <div className="stat-label">PnL Gesamt (USDT)</div>
                 </div>
               </div>
-              <div className="stat-card"><div className="stat-content"><div className="stat-value mono">{openTrades.length}</div><div className="stat-label">Offen</div></div></div>
-              <div className="stat-card"><div className="stat-content"><div className="stat-value mono">{closedTrades.length}</div><div className="stat-label">Geschlossen</div></div></div>
+              <div className="stat-card"><div className="stat-content"><div className="stat-value mono">{nOpen}</div><div className="stat-label">Offen</div></div></div>
+              <div className="stat-card"><div className="stat-content"><div className="stat-value mono">{nClosed}</div><div className="stat-label">Geschlossen</div></div></div>
             </div>
             <div className="stats-grid" style={{ marginTop: 8 }}>
               <div className="stat-card stat-card-coin" data-testid="pnl-coin-card">
@@ -465,8 +496,8 @@ const PerformanceAnalytics = ({ performance, strategies = [], enabledIds = [], s
                   <div className="stat-label">PnL {getCoinName(selectedCoin)} (USDT)</div>
                 </div>
               </div>
-              <div className="stat-card"><div className="stat-content"><div className="stat-value mono">{coinOpenTrades.length}</div><div className="stat-label">Offen · {getCoinName(selectedCoin)}</div></div></div>
-              <div className="stat-card"><div className="stat-content"><div className="stat-value mono">{coinClosedTrades.length}</div><div className="stat-label">Geschl. · {getCoinName(selectedCoin)}</div></div></div>
+              <div className="stat-card"><div className="stat-content"><div className="stat-value mono">{nCoinOpen}</div><div className="stat-label">Offen · {getCoinName(selectedCoin)}</div></div></div>
+              <div className="stat-card"><div className="stat-content"><div className="stat-value mono">{nCoinClosed}</div><div className="stat-label">Geschl. · {getCoinName(selectedCoin)}</div></div></div>
             </div>
           </div>
 

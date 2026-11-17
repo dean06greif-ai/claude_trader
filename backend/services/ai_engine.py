@@ -1318,7 +1318,13 @@ class AIEngine(AIEngineContextMixin, AIEngineGovernanceMixin,
         crv_min = max(1.0, float(self.config.get("crv_min", 1.2) or 1.2))
         crv_max = float(self.config.get("crv_max", 0) or 0)
         cap = 0.25 if is_swing else 0.10
+        tp1_in, tpf_in = float(tp1_pct or 0), float(tpf_pct or 0)
         tp1_pct = max(tp1_pct, min(cap, sl_pct * crv_min))
+        # 17.11.2026 (Trader-Meldung „TP und TP1 aufeinander“): Detektoren liefern oft
+        # TP1 1 R / TP-Full 1,5 R; das CRV-Minimum 1,5 hob nur TP1 an, TP-Full blieb
+        # liegen -> beide gleich. TP-Full folgt jetzt im selben Verhältnis.
+        if tp1_in > 0 and tp1_pct > tp1_in and tpf_in > tp1_in:
+            tpf_pct = tpf_in * (tp1_pct / tp1_in)
         if crv_max >= crv_min:
             tp1_pct = min(tp1_pct, sl_pct * crv_max)
             # TP Full ebenfalls deckeln (User 15.06.: keine unrealistisch weiten

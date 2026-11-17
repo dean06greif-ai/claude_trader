@@ -575,3 +575,8 @@ Details: `docs/ZUSAMMENSPIEL_2026-11-17.md`.
 - **Prüfer:** keine KI-Prüfung mehr für klare Gegentrend-Signale (LONG bei Tages-Bias „down“, SHORT bei „up“), solange Edge-Filter, „Nur mit Tagestrend“ und „Sammel-Trades nicht gegen Tagestrend“ an sind – solche Signale können weder live gehen noch einen Kontroll-Trade bekommen. Seit dem letzten Deploy waren das fast alle geprüften Signale.
 - **Offline-Prüfkit** `backend/tests/offline/`: Test-Suite ohne Netzwerk mit Baseline der Umgebungs-Fehler, Frontend-Syntaxcheck (für automatische Pflege-Läufe).
 - **Pflege-Protokoll** `docs/BEOBACHTUNGEN.md`: Kennzahlen, Änderungen und offene Punkte je Lauf.
+
+## TP1/TP-Full-Fehler, Gesamt-Statistik der Analyse (17.11.2026, achtes Paket)
+
+- **TP1 = TP-Full behoben:** Das CRV-Minimum (1,5) hob bei Detektor-Levels (TP1 1 R / TP-Full 1,5 R) nur TP1 an; TP-Full blieb liegen, beide fielen zusammen. TP-Full folgt jetzt im selben Verhältnis (`AIEngine._apply_crv_frame`). Die Trade-Karte zeigt das echte R aus Entry und Anfangs-SL.
+- **Analyse-Statistik über alle Trades:** neuer Endpunkt `GET /api/autotrade/trade-summary?filter=…&symbol=…` (`services/trade_summary.py`), die Analyse-Ansicht nutzt ihn für PnL, Anzahl offen/geschlossen und „Performance je Strategie“. Vorher änderten sich die Zahlen beim „Mehr laden“.
