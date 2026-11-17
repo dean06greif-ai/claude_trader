@@ -580,3 +580,8 @@ Details: `docs/ZUSAMMENSPIEL_2026-11-17.md`.
 
 - **TP1 = TP-Full behoben:** Das CRV-Minimum (1,5) hob bei Detektor-Levels (TP1 1 R / TP-Full 1,5 R) nur TP1 an; TP-Full blieb liegen, beide fielen zusammen. TP-Full folgt jetzt im selben Verhältnis (`AIEngine._apply_crv_frame`). Die Trade-Karte zeigt das echte R aus Entry und Anfangs-SL.
 - **Analyse-Statistik über alle Trades:** neuer Endpunkt `GET /api/autotrade/trade-summary?filter=…&symbol=…` (`services/trade_summary.py`), die Analyse-Ansicht nutzt ihn für PnL, Anzahl offen/geschlossen und „Performance je Strategie“. Vorher änderten sich die Zahlen beim „Mehr laden“.
+
+## Analyse-Statistik stabil, Bewertungs-Stichtag (17.11.2026, neuntes Paket)
+
+- **Statistik springt nicht mehr:** Die Analyse-Ansicht merkt sich je Filter und Coin den letzten Server-Stand. Ein Fehlversuch oder ein Filterwechsel fällt nicht mehr auf die Teil-Summe der geladenen Trades zurück; beim ersten Laden steht „…“. Nur wenn der Server nicht antwortet, wird über die geladenen Trades gezählt, mit sichtbarem Hinweis. Backend: 10-s-Cache der Trade-Zeilen (`trade_summary.RowCache`).
+- **Bewertungs-Stichtag 17.11. 23:15** (Auftrag des Traders): einmalige Boot-Migration `migrate_evaluation_cutoff_1711`. Verschiebt nur nach vorn, nie zurück; danach gilt, was im Leitstand eingestellt wird.

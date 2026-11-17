@@ -52,7 +52,10 @@ const PerformanceAnalytics = ({ performance, strategies = [], enabledIds = [], s
   const [closedTotal, setClosedTotal] = useState(null);
   // Gesamt-Statistik über ALLE Trades vom Server (17.11.2026): vorher wurde nur über
   // die geladenen Trades gerechnet – „Mehr laden“ veränderte PnL und Zähler.
-  const [summary, setSummary] = useState(null);
+  // Je Filter+Coin der letzte gute Server-Stand (ein Fehlversuch oder ein Filterwechsel
+  // fällt nicht mehr auf die Teil-Summe der geladenen Trades zurück).
+  const [summaries, setSummaries] = useState({});
+  const [summaryDown, setSummaryDown] = useState(false);
   const [shownClosed, setShownClosed] = useState(30);
   const [loadingMore, setLoadingMore] = useState(false);
   // Zeit-Analyse: Strategie-Filter ('' = Coin gesamt) + Ansicht (Uhrzeiten/Wochentage/Kombi)
@@ -147,18 +150,29 @@ const PerformanceAnalytics = ({ performance, strategies = [], enabledIds = [], s
   useEffect(() => {
     if (view !== 'trades' && view !== 'overview') return undefined;
     let alive = true;
+    const key = `${pnlFilter}|${selectedCoin || ''}`;
+    setSummaryDown(false);   // neuer Filter/Coin: erst laden („…“), nicht sofort Teil-Summen
     const load = () => {
       const q = `filter=${encodeURIComponent(pnlFilter)}${selectedCoin ? `&symbol=${encodeURIComponent(selectedCoin)}` : ''}`;
-      fetch(`${API_URL}/api/autotrade/trade-summary?${q}`).then(r => (r.ok ? r.json() : null))
-        .then(d => { if (alive) setSummary(d && d.totals ? d : null); }).catch(() => {});
+      fetch(`${API_URL}/api/autotrade/trade-summary?${q}`)
+        .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+        .then(d => {
+          if (!alive || !d || !d.totals) return;
+          setSummaries(prev => ({ ...prev, [key]: d }));
+          setSummaryDown(false);
+        })
+        .catch(() => { if (alive) setSummaryDown(true); });
     };
     load();
     const iv = setInterval(load, 15000);
     return () => { alive = false; clearInterval(iv); };
   }, [view, pnlFilter, selectedCoin]);
   // Server-Werte nur nutzen, wenn sie zum aktuellen Filter/Coin passen
-  const sumOk = !!(summary && summary.filter === pnlFilter
-    && (summary.coin || {}).symbol === (selectedCoin || null));
+  const summary = summaries[`${pnlFilter}|${selectedCoin || ''}`] || null;
+  const sumOk = !!summary;
+  // Noch kein Server-Stand: „…“ statt Teil-Summen; nur wenn der Server nicht
+  // antwortet, werden die geladenen Trades gezählt (mit Hinweis).
+  const sumPending = !sumOk && !summaryDown;
 
   // Globaler Live/Paper-Filter (obere Auswahl) für den GESAMTEN Analyse-Bereich
   // Datensammel-Trades des KI-Traders (data_collection) sind KEINE Paper-
@@ -237,12 +251,19 @@ const PerformanceAnalytics = ({ performance, strategies = [], enabledIds = [], s
   const coinClosedTrades = closedTrades.filter(t => t.symbol === selectedCoin);
   const coinOpenTrades = openTrades.filter(t => t.symbol === selectedCoin);
 
-  const pnlTotal = sumOk ? summary.totals.pnl : closedTrades.reduce((a, t) => a + (t.realized_pnl || 0), 0);
-  const coinPnl = sumOk ? summary.coin.pnl : coinClosedTrades.reduce((a, t) => a + (t.realized_pnl || 0), 0);
-  const nOpen = sumOk ? summary.totals.open : openTrades.length;
-  const nClosed = sumOk ? summary.totals.closed : closedTrades.length;
-  const nCoinOpen = sumOk ? summary.coin.open : coinOpenTrades.length;
-  const nCoinClosed = sumOk ? summary.coin.closed : coinClosedTrades.length;
+  const pick = (server, client) => (sumOk ? server : (sumPending ? null : client));
+  const pnlTotal = pick(summary?.totals?.pnl, closedTrades.reduce((a, t) => a + (t.realized_pnl || 0), 0));
+  const coinPnl = pick(summary?.coin?.pnl, coinClosedTrades.reduce((a, t) => a + (t.realized_pnl || 0), 0));
+  const nOpen = pick(summary?.totals?.open, openTrades.length);
+  const nClosed = pick(summary?.totals?.closed, closedTrades.length);
+  const nCoinOpen = pick(summary?.coin?.open, coinOpenTrades.length);
+  const nCoinClosed = pick(summary?.coin?.closed, coinClosedTrades.length);
+  const fmtNum = (v) => (v == null ? '…' : v);
+  const fmtPnl = (v) => (v == null ? '…' : v.toFixed(2));
+  const pnlColor = (v) => (v == null ? undefined : (v >= 0 ? '#00FF66' : '#FF3366'));
+  const statHint = summaryDown && !sumOk
+    ? 'Server-Statistik gerade nicht erreichbar – Summe nur über die geladenen Trades'
+    : 'Gesamt über alle Trades (Server)';
 
   // Performance je Strategie für den GEWÄHLTEN COIN.
   // Wir starten mit ALLEN aktivierten Strategien (damit KI Trader garantiert
@@ -270,7 +291,7 @@ const PerformanceAnalytics = ({ performance, strategies = [], enabledIds = [], s
         wins: r.wins, losses: r.losses, total: r.total, openCount: r.openCount, pnl: r.pnl };
     });
   }
-  (sumOk ? [] : [...closedTrades, ...openTrades]).forEach(t => {
+  (sumOk || sumPending ? [] : [...closedTrades, ...openTrades]).forEach(t => {
     if (t.symbol !== selectedCoin) return;
     // Manuelle Trades (Bitunix-App/Website) sind keine Strategie – aus dem
     // Strategie-Vergleich ausgeblendet (User-Vorgabe)
@@ -478,35 +499,39 @@ const PerformanceAnalytics = ({ performance, strategies = [], enabledIds = [], s
             <div className="stats-grid">
               <div className="stat-card" data-testid="pnl-total-card">
                 <div className="stat-content">
-                  <div className="stat-value mono" style={{ color: pnlTotal >= 0 ? '#00FF66' : '#FF3366' }}>
-                    {pnlTotal.toFixed(2)}
+                  <div className="stat-value mono" title={statHint} style={{ color: pnlColor(pnlTotal) }}>
+                    {fmtPnl(pnlTotal)}
                   </div>
                   <div className="stat-label">PnL Gesamt (USDT)</div>
                 </div>
               </div>
-              <div className="stat-card"><div className="stat-content"><div className="stat-value mono">{nOpen}</div><div className="stat-label">Offen</div></div></div>
-              <div className="stat-card"><div className="stat-content"><div className="stat-value mono">{nClosed}</div><div className="stat-label">Geschlossen</div></div></div>
+              <div className="stat-card"><div className="stat-content"><div className="stat-value mono">{fmtNum(nOpen)}</div><div className="stat-label">Offen</div></div></div>
+              <div className="stat-card"><div className="stat-content"><div className="stat-value mono">{fmtNum(nClosed)}</div><div className="stat-label">Geschlossen</div></div></div>
             </div>
             <div className="stats-grid" style={{ marginTop: 8 }}>
               <div className="stat-card stat-card-coin" data-testid="pnl-coin-card">
                 <div className="stat-content">
-                  <div className="stat-value mono" style={{ color: coinPnl >= 0 ? '#00FF66' : '#FF3366' }}>
-                    {coinPnl.toFixed(2)}
+                  <div className="stat-value mono" title={statHint} style={{ color: pnlColor(coinPnl) }}>
+                    {fmtPnl(coinPnl)}
                   </div>
                   <div className="stat-label">PnL {getCoinName(selectedCoin)} (USDT)</div>
                 </div>
               </div>
-              <div className="stat-card"><div className="stat-content"><div className="stat-value mono">{nCoinOpen}</div><div className="stat-label">Offen · {getCoinName(selectedCoin)}</div></div></div>
-              <div className="stat-card"><div className="stat-content"><div className="stat-value mono">{nCoinClosed}</div><div className="stat-label">Geschl. · {getCoinName(selectedCoin)}</div></div></div>
+              <div className="stat-card"><div className="stat-content"><div className="stat-value mono">{fmtNum(nCoinOpen)}</div><div className="stat-label">Offen · {getCoinName(selectedCoin)}</div></div></div>
+              <div className="stat-card"><div className="stat-content"><div className="stat-value mono">{fmtNum(nCoinClosed)}</div><div className="stat-label">Geschl. · {getCoinName(selectedCoin)}</div></div></div>
             </div>
+            {summaryDown && !sumOk && (
+              <div className="no-data" data-testid="pnl-summary-fallback">{statHint}</div>
+            )}
           </div>
 
           <div className="analytics-section">
             <div className="section-title">
               PERFORMANCE JE STRATEGIE · {getCoinName(selectedCoin)}{pnlFilter !== 'all' ? ` · ${pnlFilter === 'live' ? 'LIVE' : pnlFilter === 'collection' ? 'DATENSAMMLUNG' : 'PAPER'}` : ''}
             </div>
-            {stratRows.length === 0 && <div className="no-data">Noch keine Trades auf {getCoinName(selectedCoin)}</div>}
-            {stratRows.map(s => {
+            {sumPending && <div className="no-data">Statistik wird geladen…</div>}
+            {!sumPending && stratRows.length === 0 && <div className="no-data">Noch keine Trades auf {getCoinName(selectedCoin)}</div>}
+            {!sumPending && stratRows.map(s => {
               const empty = s.total === 0 && s.openCount === 0;
               return (
                 <div key={s.id} className={`strat-perf-row ${empty ? 'strat-perf-empty' : ''}`} data-testid={`strat-perf-${s.id}`}>

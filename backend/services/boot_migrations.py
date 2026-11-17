@@ -813,6 +813,38 @@ async def migrate_decisions_1711(db):
     await _mark(db, "decisions_1711_v1")
 
 
+EVAL_CUTOFF_1711 = "2026-11-17T22:15:00+00:00"    # 23:15 Berlin: alle Fixes vom 17.11. live
+
+
+async def migrate_evaluation_cutoff_1711(db):
+    """17.11.2026 (Trader: „Einstellungen bitte selbst machen“): Bewertungs-Stichtag
+    auf den Stand nach den Fixes vom 17.11. legen (Prüfer-Selbstblockade,
+    Gegentrend-Sperre, TP1 = TP-Full). Ältere KI-Trades zählen damit nicht mehr für
+    Lernen, Freigaben und Prüfer-Bilanz – sie waren durch diese Fehler verfälscht –,
+    bleiben aber sichtbar. Einmalig, nur wenn der bisherige Stichtag früher liegt
+    oder fehlt; im Leitstand jederzeit änderbar."""
+    if await _done(db, "evaluation_cutoff_1711_v1"):
+        return
+    from services import evaluation_cutoff
+    cur = (await evaluation_cutoff.status(db)).get("since")
+    target = evaluation_cutoff.normalize(EVAL_CUTOFF_1711)
+    if not cur or evaluation_cutoff.is_after(target, since=cur) and cur != target:
+        await evaluation_cutoff.set_since(
+            db, target, by="claude",
+            note="Nach den Fixes vom 17.11. (Prüfer-Selbstblockade, Gegentrend-Sperre, TP1/TP-Full) – "
+                 "ältere KI-Trades waren dadurch verfälscht. Auftrag des Traders.")
+        try:
+            await db.ai_chat.insert_one({
+                "id": f"cut1711_{datetime.now(timezone.utc).timestamp():.0f}", "role": "governance",
+                "ts": _now_iso(),
+                "text": ("Bewertungs-Stichtag auf 17.11.2026 23:15 gesetzt: Lernen, Freigaben und die "
+                         "Prüfer-Bilanz zählen nur noch KI-Trades nach den Fixes vom 17.11. Alte Trades "
+                         "bleiben sichtbar. Änderbar im Leitstand.")})
+        except Exception:  # noqa: BLE001
+            pass
+    await _mark(db, "evaluation_cutoff_1711_v1")
+
+
 async def migrate_portfolio_universe_64(db):
     """Portfolio: gespeicherte Coin-Liste von 26 auf 64 Coins erweitern – nur wenn
     sie noch genau die alte Standardliste ist (eigene Auswahl bleibt)."""
@@ -857,7 +889,8 @@ async def run_boot_migrations(db, engine):
                      (migrate_risk_usdt_backfill, (db,)),
                      (migrate_setup_backtest_edges, (db,)),
                      (migrate_lesson_attribution_backfill, (db,)),
-                     (migrate_regime_history_import, (db,))):
+                     (migrate_regime_history_import, (db,)),
+                     (migrate_evaluation_cutoff_1711, (db,))):
         try:
             await fn(*args)
         except Exception as e:

@@ -37,7 +37,9 @@ def test_endpoint_reads_all_trades():
     pytest.importorskip("fastapi")              # Sandbox ohne fastapi: nur die Logik oben
     from core import state
     from routers import autotrade
+    from services import trade_summary as ts
     from tests.phase_fakedb import FakeDB
+    ts.CACHE.clear()
     db = FakeDB()
     for r in ROWS:
         asyncio.run(db.auto_trades.insert_one(dict(r)))
@@ -47,4 +49,18 @@ def test_endpoint_reads_all_trades():
         res = asyncio.run(autotrade.trade_summary(filter="all", symbol="BTCUSDT"))
     finally:
         state.db = old
+        ts.CACHE.clear()
     assert res["totals"]["closed"] >= 3 and res["coin"]["symbol"] == "BTCUSDT"
+
+
+def test_row_cache_expires_after_ttl():
+    from services.trade_summary import RowCache
+    now = [100.0]
+    c = RowCache(ttl=10, clock=lambda: now[0])
+    assert c.get() is None
+    rows = [{"id": "a"}]
+    assert c.put(rows) is rows and c.get() is rows
+    now[0] += 9.9
+    assert c.get() is rows
+    now[0] += 0.2
+    assert c.get() is None

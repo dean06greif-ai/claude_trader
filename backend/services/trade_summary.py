@@ -5,12 +5,39 @@ gerade GELADENEN Trades (die letzten 200 + „Mehr laden“). Beim Nachladen
 änderte sich deshalb die Statistik (Trader-Meldung). Jetzt kommt sie über ALLE
 Trades vom Server – mit exakt denselben Filtern wie in der Ansicht.
 """
-from typing import Callable, Dict, Iterable, Optional
+import time
+from typing import Callable, Dict, Iterable, List, Optional
 
 FILTERS = ("all", "live", "paper", "collection")
 FIELDS = {"_id": 0, "id": 1, "status": 1, "mode": 1, "data_collection": 1, "strategy_id": 1,
           "strategy_name": 1, "symbol": 1, "result": 1, "realized_pnl": 1, "manual_trade": 1,
           "external_adopted": 1}
+
+
+class RowCache:
+    """Kurzzeit-Cache der Trade-Zeilen (Standard 10 s): Ein Filter- oder Coin-Wechsel
+    direkt nach einer Abfrage braucht dann keine zweite Voll-Abfrage (~3 s in Produktion)."""
+
+    def __init__(self, ttl: float = 10.0, clock: Callable[[], float] = time.monotonic):
+        self.ttl = ttl
+        self.clock = clock
+        self._rows: Optional[List[Dict]] = None
+        self._ts = 0.0
+
+    def get(self) -> Optional[List[Dict]]:
+        if self._rows is not None and self.clock() - self._ts < self.ttl:
+            return self._rows
+        return None
+
+    def put(self, rows: List[Dict]) -> List[Dict]:
+        self._rows, self._ts = rows, self.clock()
+        return rows
+
+    def clear(self) -> None:
+        self._rows = None
+
+
+CACHE = RowCache()
 
 
 def passes(t: Dict, flt: str, stale: Callable[[str], bool]) -> bool:

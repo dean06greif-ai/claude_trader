@@ -25,8 +25,14 @@ Zusammenfassung verdichtet.
 
 **Offen / beim nächsten Lauf prüfen:**
 - Neue KI-Trades: Liegen TP1 und TP-Full auseinander? Wirkt sich der weitere TP-Full auf das R aus?
-- Bewertungs-Stichtag im Leitstand auf den 17.11. 19:45 setzen. Das entscheidet der Trader;
-  danach zählt die Prüfer-Bilanz nur saubere Daten.
+- Bewertungs-Stichtag: auf Wunsch des Traders per einmaliger Boot-Migration auf den
+  17.11. 23:15 gesetzt (nach dem TP-Fix, nicht 19:45). Im Leitstand jederzeit änderbar.
+- Analyse-Statistik sprang trotz Server-Summe noch: Beim ersten Laden (~3,5 s) und bei jedem
+  Fehlversuch zeigte die Ansicht kurz die Teil-Summe der geladenen Trades. Jetzt bleibt der
+  letzte Server-Stand je Filter/Coin stehen, beim ersten Laden steht „…“; Teil-Summen nur noch
+  mit sichtbarem Hinweis, wenn der Server nicht antwortet. Zeilen-Cache 10 s im Backend.
+- Offen: Die Trade-Abfrage blockiert die Ereignisschleife zeitweise ~2 s (Setup-Trigger-Scans),
+  dadurch dauert `/api/autotrade/trade-summary` ~3,5 s.
 
 ## 2026-11-17 (Abend, von Hand)
 

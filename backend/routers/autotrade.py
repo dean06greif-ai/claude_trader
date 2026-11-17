@@ -229,7 +229,9 @@ async def trade_summary(filter: str = "all", symbol: Optional[str] = None):
     """Gesamt-Statistik über ALLE Trades (gleiche Filter wie die Analyse-Ansicht).
     17.11.2026: vorher rechnete das Frontend nur über die geladenen Trades."""
     from services import trade_summary as ts
-    rows = await state.db.auto_trades.find({}, ts.FIELDS).to_list(100_000)
+    rows = ts.CACHE.get()
+    if rows is None:
+        rows = ts.CACHE.put(await state.db.auto_trades.find({}, ts.FIELDS).to_list(100_000))
     return ts.summarize(rows, filter, symbol, stale=is_stale_strategy)
 
 
