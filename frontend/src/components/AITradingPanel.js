@@ -18,7 +18,7 @@ import EventScheduleBadges from './EventScheduleBadges';
 import AITraderReset from './AITraderReset';
 import AIModelCatalog from './AIModelCatalog';
 import AIModelNewsBanner from './AIModelNewsBanner';
-import { MODEL_OPTIONS } from '../lib/aiModels';
+import { MODEL_OPTIONS, withCurrent } from '../lib/aiModels';
 import './AITradingPanel.css';
 import AIDiagnosisPanel from './AIDiagnosisPanel';
 import PolicyReportCard from './PolicyReportCard';
@@ -1117,7 +1117,9 @@ const AITradingPanel = ({ onClose, selectedCoin = 'BTCUSDT' }) => {
               )}
               <span className="ai-panel-sub">
                 {cfg.enabled
-                  ? `Aktiv · analysiert alle ${cfg.interval_min} min${status?.analyzing ? ' · analysiert gerade…' : ''}`
+                  ? (cfg.ai_role === 'pruefer' && cfg.signal_broker_enabled !== false
+                    ? `Aktiv · Prüfer: prüft Detektor-Signale (Haupt-Modell nur Ersatz)${status?.analyzing ? ' · prüft gerade…' : ''}`
+                    : `Aktiv · analysiert alle ${cfg.interval_min} min${status?.analyzing ? ' · analysiert gerade…' : ''}`)
                   : 'Ausgeschaltet – aktiviere die KI, damit sie eigenständig analysiert & tradet'}
               </span>
             </div>
@@ -1553,8 +1555,8 @@ const AITradingPanel = ({ onClose, selectedCoin = 'BTCUSDT' }) => {
         {/* Setup (collapsible) */}
         {showSetup && (
           <div className="ai-setup" data-testid="ai-setup-panel">
-            <label>
-              <span>KI-Modell</span>
+            <label title="Haupt-Modell der Engine: nur Ersatz für Rollen ohne eigenes Modell (im KI-Team hat jede Rolle ihr eigenes Modell). Ein kostenloses Modell ist hier richtig.">
+              <span>KI-Modell (Haupt-Modell, nur Ersatz)</span>
               <select
                 value={modelValue}
                 onChange={e => {
@@ -1563,13 +1565,13 @@ const AITradingPanel = ({ onClose, selectedCoin = 'BTCUSDT' }) => {
                 }}
                 data-testid="ai-model-select"
               >
-                {allModelOptions.map(o => (
+                {withCurrent(allModelOptions, cfg.provider, cfg.model).map(o => (
                   <option key={o.model} value={`${o.provider}|${o.model}`}>{o.label}</option>
                 ))}
               </select>
             </label>
-            <label>
-              <span>Analyse-Intervall</span>
+            <label title={cfg.ai_role === 'pruefer' ? 'Im Prüfer-Modus ohne Wirkung: Die KI prüft nur Detektor-Signale, ein fester Analyse-Zyklus läuft nicht.' : 'Abstand der regelmäßigen Voll-Analyse'}>
+              <span>Analyse-Intervall{cfg.ai_role === 'pruefer' ? ' (Prüfer: aus)' : ''}</span>
               <select value={cfg.interval_min || 10} onChange={e => updateConfig({ interval_min: Number(e.target.value) })} data-testid="ai-interval-select">
                 {[5, 10, 15, 30, 60].map(v => <option key={v} value={v}>{`${v} min`}</option>)}
               </select>
@@ -2188,7 +2190,7 @@ const AITradingPanel = ({ onClose, selectedCoin = 'BTCUSDT' }) => {
                         }}
                         data-testid={`ai-role-model-${rd.key}`}>
                         <option value="">Haupt-Modell (erben)</option>
-                        {allModelOptions.map(o => (
+                        {withCurrent(allModelOptions, rc.provider, rc.model).map(o => (
                           <option key={o.model} value={`${o.provider}|${o.model}`}>{o.label}</option>
                         ))}
                       </select>
@@ -2227,7 +2229,7 @@ const AITradingPanel = ({ onClose, selectedCoin = 'BTCUSDT' }) => {
                         }}
                         data-testid={`ai-role-fallback-${rd.key}`}>
                         <option value="">keine</option>
-                        {allModelOptions.map(o => (
+                        {withCurrent(allModelOptions, rc.fallback_provider, rc.fallback_model).map(o => (
                           <option key={o.model} value={`${o.provider}|${o.model}`}>{o.label}</option>
                         ))}
                       </select>
@@ -2242,7 +2244,7 @@ const AITradingPanel = ({ onClose, selectedCoin = 'BTCUSDT' }) => {
                         }}
                         data-testid={`ai-role-fallback2-${rd.key}`}>
                         <option value="">keine</option>
-                        {allModelOptions.map(o => (
+                        {withCurrent(allModelOptions, rc.fallback2_provider, rc.fallback2_model).map(o => (
                           <option key={o.model} value={`${o.provider}|${o.model}`}>{o.label}</option>
                         ))}
                       </select>

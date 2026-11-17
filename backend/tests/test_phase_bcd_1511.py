@@ -211,7 +211,8 @@ def test_night_window_and_key():
 def test_night_rotation_and_body():
     # 17.11.2026: Trend-Slot steht vorn (einzige Vorteils-Quelle mit Beleg), Ziel t-Wert (R)
     assert nr.next_slot({})["key"] == "crypto_1h_trend"
-    assert nr.next_slot({"last_slot": "crypto_15m"})["key"] == "crypto_1h"
+    assert nr.next_slot({"last_slot": "crypto_1h"})["key"] == "crypto_15m"
+    assert nr.next_slot({"last_slot": "forex_1h"})["key"] == "crypto_1h_trend"   # alter Slot (17.11.)
     assert nr.next_slot({"last_slot": nr.ROTATION[-1]["key"]})["key"] == "crypto_1h_trend"
     body = nr.build_body(nr.ROTATION[1], ["BTCUSDT", "ETHUSDT"], 300)
     assert body["mode"] == "explore" and body["execution"] == "local" and body["max_rules"] == 3
@@ -253,7 +254,7 @@ def test_night_tick_plans_once(monkeypatch):
     again = run(nr.tick(db, now_utc=night + timedelta(minutes=30)))
     assert again["planned"] is False
     st = run(nr.get_state(db))
-    assert st["last_slot"] == "crypto_1h_trend" and st["next"] == "Krypto 15m"
+    assert st["last_slot"] == "crypto_1h_trend" and st["next"] == "Krypto 1h"
 
 
 # =============================== Kandidaten ===============================

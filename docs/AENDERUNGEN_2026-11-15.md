@@ -560,3 +560,12 @@ Details: `docs/KI_TRADER_MODELLE_2026-11-17.md`.
 - **KI-Guthaben-Reichweite:** Verbrauch $/Tag je OpenRouter-Key, Banner im KI-Tab und Cockpit-Empfehlung unter 14 Tagen.
 - **Meldungen:** Tages-Sperren überstehen Neustarts (DB-Dedupe, Website + Telegram).
 - Forschung: Volatilitäts-Steuerung, Korb-Größe, Ausbruchslängen, Filter und Querschnitts-Momentum geprüft – nichts schlägt das Portfolio in allen Zeiträumen (Momentum im Holdout gescheitert).
+
+## KI-Team-Anzeige, Nachtsuche, Optimizer-Vorgabe (17.11.2026, sechstes Paket)
+
+Details: `docs/ZUSAMMENSPIEL_2026-11-17.md`.
+
+- **KI-Team-Anzeige:** GPT-6 Luna Pro, Claude Haiku 5.5 und DeepSeek V4.1 Flash fehlten in der Frontend-Modellliste – die Rollen zeigten deshalb „Haupt-Modell (erben)“/„keine“, obwohl das Backend die richtigen Modelle nutzte. Liste ergänzt, vom Anbieter entfernte Modelle raus, das aktuell gewählte Modell wird immer angezeigt; Test hält Frontend- und Backend-Katalog synchron.
+- **Prüfer-Modus sichtbar:** Kopfzeile „Prüfer: prüft Detektor-Signale“ statt „analysiert alle 10 min“; Analyse-Intervall als „(Prüfer: aus)“ beschriftet; Haupt-Modell als „nur Ersatz“ beschriftet.
+- **Nachtsuche:** Rotation nur noch Krypto 1h Trend → Krypto 1h → Krypto 15m (Forex/Rohstoffe/Indizes können wegen „Live nur Krypto“ nie live gehen, 5m scheitert an Gebühren).
+- **Optimizer „Empfohlene Einstellungen“:** 1h, 365 Tage statt 15m, 180 Tage.

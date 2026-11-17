@@ -41,12 +41,12 @@ ROTATION: Tuple[Dict, ...] = (
     {"key": "crypto_1h_trend", "label": "Krypto 1h Trend", "classes": ("crypto",), "timeframe": "1h",
      "days": 540, "max_assets": 20, "indicators": TREND_INDICATORS,
      "optimize": {"tpsl": True, "trail": True}},
-    {"key": "crypto_15m", "label": "Krypto 15m", "classes": ("crypto",), "timeframe": "15m", "days": 180},
+    # 17.11.2026 (Abend): Rotation auf Krypto mit Kosten-Spielraum gekürzt. Forex 1h und
+    # Rohstoffe/Indizes 1h fallen raus: „Live nur Krypto“ ist an, ein Fund dort könnte nie
+    # live gehen (und alle Nicht-Krypto-Trades lagen bei −0,45 bis −0,77 R). Krypto 5m fällt
+    # raus: Gebühren je Risiko zu hoch. Jede Nacht ist damit ein Krypto-Lauf, Trend jede 3.
     {"key": "crypto_1h", "label": "Krypto 1h", "classes": ("crypto",), "timeframe": "1h", "days": 365},
-    {"key": "forex_1h", "label": "Forex 1h", "classes": ("forex",), "timeframe": "1h", "days": 365},
-    {"key": "crypto_5m", "label": "Krypto 5m", "classes": ("crypto",), "timeframe": "5m", "days": 120},
-    {"key": "macro_1h", "label": "Rohstoffe + Indizes 1h", "classes": ("resources", "indices"),
-     "timeframe": "1h", "days": 365},
+    {"key": "crypto_15m", "label": "Krypto 15m", "classes": ("crypto",), "timeframe": "15m", "days": 180},
 )
 
 

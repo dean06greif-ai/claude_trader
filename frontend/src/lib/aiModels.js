@@ -1,6 +1,15 @@
 // Zentraler KI-Modell-Katalog fürs Frontend (eine Quelle für alle Panels).
 // Muss zu backend/services/ai_providers.ALLOWED_MODELS passen –
 // der Modell-Wächter (services/ai_model_watch.py) verifiziert die Slugs wöchentlich.
+// Aktuell gewähltes Modell immer anzeigen – auch wenn es (noch) nicht in der Liste steht.
+// Sonst zeigt ein <select> die erste Option („erben“/„keine“) und täuscht eine falsche
+// Einstellung vor (Trader-Meldung 17.11.2026).
+export const withCurrent = (options, provider, model) => (
+  !model || options.some(o => o.provider === provider && o.model === model)
+    ? options
+    : [...options, { provider, model, label: `${provider} · ${model} (aktuell)` }]
+);
+
 export const MODEL_OPTIONS = [
   // Google Gemini (GEMINI_API_KEY)
   { provider: 'gemini', model: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash (Standard, schnell & aktuell)' },
@@ -19,11 +28,13 @@ export const MODEL_OPTIONS = [
   { provider: 'openrouter', model: 'z-ai/glm-5.2', label: 'OpenRouter · GLM 5.2 (~0,46$/M – stark & präzise, bezahlt)' },
   { provider: 'openrouter', model: 'qwen/qwen3.7-flash', label: 'OpenRouter · Qwen 3.7 Flash (~0,03$/M – ultra-günstig, bezahlt)' },
   { provider: 'openrouter', model: 'x-ai/grok-4.20', label: 'OpenRouter · Grok 4.20 (~1,25$/M – Premium, 2M Kontext, bezahlt)' },
+  // 11/2026 Aufgaben-Team (Backend: ALLOWED_MODELS) – fehlten hier, deshalb zeigte das
+  // KI-Team „Haupt-Modell (erben)“, obwohl die Rolle diese Modelle nutzt (17.11.2026)
+  { provider: 'openrouter', model: 'openai/gpt-6-luna-pro', label: 'OpenRouter · GPT-6 Luna Pro (0,10/0,50 $ je 1M – Prüfer, bezahlt)' },
+  { provider: 'openrouter', model: 'anthropic/claude-haiku-5.5', label: 'OpenRouter · Claude Haiku 5.5 (0,10/0,50 $ je 1M, bezahlt)' },
+  { provider: 'openrouter', model: 'deepseek/deepseek-v4.1-flash', label: 'OpenRouter · DeepSeek V4.1 Flash (0,14/0,42 $ je 1M, bezahlt)' },
   { provider: 'openrouter', model: 'nvidia/nemotron-3-ultra-550b-a55b:free', label: 'OpenRouter · Nemotron-3 Ultra 550B (kostenlos, beste Qualität)' },
-  { provider: 'openrouter', model: 'nvidia/nemotron-3-super-120b-a12b:free', label: 'OpenRouter · Nemotron-3 Super 120B (kostenlos, stark)' },
   { provider: 'openrouter', model: 'google/gemma-4-31b-it:free', label: 'OpenRouter · Gemma 4 31B (kostenlos)' },
-  { provider: 'openrouter', model: 'openai/gpt-oss-20b:free', label: 'OpenRouter · GPT-OSS 20B (kostenlos)' },
-  { provider: 'openrouter', model: 'nvidia/nemotron-nano-9b-v2:free', label: 'OpenRouter · Nemotron Nano 9B (kostenlos, klein)' },
   // Mistral (MISTRAL_API_KEY)
   { provider: 'mistral', model: 'mistral-small-latest', label: 'Mistral Small (kostenloses Free-Tier)' },
   { provider: 'mistral', model: 'ministral-8b-latest', label: 'Mistral · Ministral 8B (kostenlos)' },

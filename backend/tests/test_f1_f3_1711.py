@@ -146,7 +146,9 @@ def test_night_trend_slot_first_and_honest_objective():
     assert body["indicators"] == nr.TREND_INDICATORS and body["optimize"] == {"tpsl": True, "trail": True}
     plain = nr.build_body(nr.ROTATION[1], ["BTCUSDT", "ETHUSDT"], 300)
     assert plain["indicators"] is None and plain["optimize"] == {"tpsl": True}
-    assert nr.next_slot({"last_slot": "crypto_1h_trend"})["key"] == "crypto_15m"
+    assert nr.next_slot({"last_slot": "crypto_1h_trend"})["key"] == "crypto_1h"
+    assert {s["classes"] for s in nr.ROTATION} == {("crypto",)}   # 17.11.: nur Krypto (Live nur Krypto)
+    assert "5m" not in {s["timeframe"] for s in nr.ROTATION}
     known = {c["ind"] for c in opt.build_candidates(None)}
     assert set(nr.TREND_INDICATORS) <= known                      # keine Tippfehler in der Liste
 

@@ -916,7 +916,7 @@ export default function Optimizer({ onClose }) {
             <div className="opt-setup" style={{ marginTop: 6 }}>
               <button type="button" className="opt-cancel-run" data-testid="explore-recommended-btn"
                 title="Setzt Einstellungen, mit denen ein echter Vorteil überhaupt nachweisbar ist: 15m, 180 Tage, 2–3 Regeln, mind. 100 Trades, 70 % Training, alle Indikatoren, Ziel t-Wert (R), nur TP/SL mitoptimieren. Assets wählst du selbst: möglichst alle einer Klasse."
-                onClick={() => { setTimeframe('15m'); setDays(180); setMaxRules(3); setMinTrades(100); setWfTrainPct(70); setObjective('t_r'); setOptFlags({ tpsl: true }); setIndicators(INDICATOR_POOL.map(i => i.id)); toast.success('Empfohlene Einstellungen übernommen (Ziel t-Wert, 100 Trades, nur TP/SL) – bitte möglichst alle Assets einer Klasse wählen'); }}>
+                onClick={() => { setTimeframe('1h'); setDays(365); setMaxRules(3); setMinTrades(100); setWfTrainPct(70); setObjective('t_r'); setOptFlags({ tpsl: true }); setIndicators(INDICATOR_POOL.map(i => i.id)); toast.success('Empfohlene Einstellungen übernommen (1h, 365 Tage, Ziel t-Wert, 100 Trades, nur TP/SL) – bitte 15–30 Krypto-Coins wählen, gern auch aus „Weitere Coins“. Auf 5m/15m fressen die Gebühren fast jeden Vorteil.'); }}>
                 Empfohlene Einstellungen
               </button>
               <span className="opt-small" data-testid="explore-power-hint">
