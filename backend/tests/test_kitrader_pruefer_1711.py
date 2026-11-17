@@ -95,3 +95,16 @@ def test_news_targets_in_pruefer_mode(monkeypatch):
     broker.signals.append(sb.build_signal("ETHUSDT", "crypto", _hit(), {}))
     assert ai_role.news_targets(PRUEFER, ["BTCUSDT"], "high") == (["ETHUSDT"], False)
     assert ai_role.news_targets(PRUEFER, ["ETHUSDT", "BTCUSDT"], "medium") == (["ETHUSDT"], False)
+
+
+def test_review_skip_for_counter_trend_signals():
+    on = {"ai_role": "pruefer", "signal_broker_enabled": True, "edge_filter_enabled": True,
+          "edge_filter_require_bias": True, "edge_filter_collection_counter_trend": True}
+    assert "gegen Tages-Bias 'down'" in ai_role.review_skip_reason(on, "LONG", "down")
+    assert "gegen Tages-Bias 'up'" in ai_role.review_skip_reason(on, "short", "up")
+    assert ai_role.review_skip_reason(on, "LONG", "up") is None          # mit dem Trend
+    assert ai_role.review_skip_reason(on, "LONG", "flat") is None        # kein klarer Gegentrend
+    assert ai_role.review_skip_reason(on, "LONG", None) is None          # ohne Bias normal prüfen
+    assert ai_role.review_skip_reason({**on, "ai_role": "frei"}, "LONG", "down") is None
+    for k in ("edge_filter_enabled", "edge_filter_require_bias", "edge_filter_collection_counter_trend"):
+        assert ai_role.review_skip_reason({**on, k: False}, "LONG", "down") is None

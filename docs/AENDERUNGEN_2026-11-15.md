@@ -569,3 +569,9 @@ Details: `docs/ZUSAMMENSPIEL_2026-11-17.md`.
 - **Prüfer-Modus sichtbar:** Kopfzeile „Prüfer: prüft Detektor-Signale“ statt „analysiert alle 10 min“; Analyse-Intervall als „(Prüfer: aus)“ beschriftet; Haupt-Modell als „nur Ersatz“ beschriftet.
 - **Nachtsuche:** Rotation nur noch Krypto 1h Trend → Krypto 1h → Krypto 15m (Forex/Rohstoffe/Indizes können wegen „Live nur Krypto“ nie live gehen, 5m scheitert an Gebühren).
 - **Optimizer „Empfohlene Einstellungen“:** 1h, 365 Tage statt 15m, 180 Tage.
+
+## Gegentrend-Sperre für KI-Prüfungen, Offline-Prüfkit, Pflege-Protokoll (17.11.2026, siebtes Paket)
+
+- **Prüfer:** keine KI-Prüfung mehr für klare Gegentrend-Signale (LONG bei Tages-Bias „down“, SHORT bei „up“), solange Edge-Filter, „Nur mit Tagestrend“ und „Sammel-Trades nicht gegen Tagestrend“ an sind – solche Signale können weder live gehen noch einen Kontroll-Trade bekommen. Seit dem letzten Deploy waren das fast alle geprüften Signale.
+- **Offline-Prüfkit** `backend/tests/offline/`: Test-Suite ohne Netzwerk mit Baseline der Umgebungs-Fehler, Frontend-Syntaxcheck (für automatische Pflege-Läufe).
+- **Pflege-Protokoll** `docs/BEOBACHTUNGEN.md`: Kennzahlen, Änderungen und offene Punkte je Lauf.

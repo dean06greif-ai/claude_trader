@@ -482,6 +482,16 @@ class SetupTrigger:
                 why = self._ai_budget_ok(symbol)
                 alloc_ok, alloc_why = True, ""
                 if not why and broker:
+                    from services import ai_role
+                    try:
+                        from services.ai_market_observer import market_observer
+                        bias = (market_observer.features_for(symbol) or {}).get("daily_bias")
+                    except Exception:  # noqa: BLE001 – ohne Bias wird normal geprüft
+                        bias = None
+                    skip = ai_role.review_skip_reason(self.cfg, hit["side"], bias)
+                    if skip:
+                        alloc_ok, alloc_why = False, skip
+                if not why and broker and alloc_ok:
                     # Phase D (15.11.2026): KI-Prüfung nur, wo ihre Auswahl nachweislich
                     # hilft (Veto-Bilanz) – sonst nur Regel-Paper, spart den KI-Aufruf.
                     from services import review_allocation

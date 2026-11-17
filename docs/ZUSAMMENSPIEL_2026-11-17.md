@@ -51,3 +51,23 @@ Binance-Tagesdaten der 64 Coins bis 17.11.
 | Nachtsuche | 6 Slots rundum, davon Forex 1h, Rohstoffe/Indizes 1h, Krypto 5m | nur noch Krypto 1h Trend → Krypto 1h → Krypto 15m. „Live nur Krypto“ ist an, Funde außerhalb von Krypto könnten nie live gehen; auf 5m fressen die Gebühren den Vorteil |
 | Optimizer „Empfohlene Einstellungen“ | 15m, 180 Tage | 1h, 365 Tage, Ziel t-Wert, 100 Trades, 15–30 Krypto-Coins |
 | Übrige KI-Trader-Einstellungen (Fee-Wächter, Mindest-SL, Edge-Filter, Live nur Krypto, Prüfer) | passen zu den Befunden | unverändert |
+
+## Risiko-Stufe statt Hebel (Rückrechnung, 64 Coins, Stand 17.11.)
+
+Die Positionsgröße richtet sich nach dem Stop: Ein Stop-Treffer kostet genau das eingestellte
+Risiko je Trade. Der Hebel bestimmt nur die gebundene Marge. Mehr Ertrag gibt es nur über mehr
+Risiko je Trade, und der Sharpe (Ertrag je Schwankung) bleibt dabei gleich.
+
+| Risiko je Trade | ab 2025: Ertrag p. a. | ab 2025: größter Rückgang | 2020–2026: größter Rückgang |
+|---|---|---|---|
+| 0,25 % (vorsichtig) | +32 % | 15 % | 19 % |
+| 0,5 % (normal) | +46 % | 26 % | 33 % |
+| 0,75 % | +59 % | 36 % | 46 % |
+| 1,0 % (offensiv) | +71 % | 44 % | 56 % |
+| 1,5 % | +88 % | 57 % | 72 % |
+| 2,0 % | +84 % | 67 % | 85 % |
+
+- Ab etwa 1,5 % steigt der Ertrag nicht mehr, nur noch der Rückgang (Volatilitäts-Bremse).
+- Das Live-Modul rechnet mit 1 % des Live-Kapitals, weil kleinere Beträge unter die
+  Mindest-Ordergrößen fallen. Die Not-Aus-Grenze von 30 % kann bei dieser Stufe schon in einer
+  normalen Durststrecke auslösen.

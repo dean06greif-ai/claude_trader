@@ -63,3 +63,22 @@ def news_targets(cfg: Optional[Dict], impulse, severity: str):
     if not impulse and severity == "high":
         impulse = sorted({x["symbol"] for x in signal_broker.open_signals()})[:6]
     return impulse, False
+
+
+def review_skip_reason(cfg: Optional[Dict], side: Optional[str], bias: Optional[str]) -> Optional[str]:
+    """17.11.2026 (Abend): Prüfer-Modus – ein klares Gegentrend-Signal (LONG bei
+    Tages-Bias 'down', SHORT bei 'up') kann weder live gehen (Edge-Filter: nur mit
+    Tagestrend) noch einen Kontroll-Trade bekommen (Sammel-Trades nicht gegen den
+    Tagestrend). Eine KI-Prüfung (~22.000 Tokens) hätte dann keinerlei Wirkung und
+    wäre auch nicht messbar. Nur wenn alle drei Schalter an sind; sonst None."""
+    if not is_pruefer(cfg):
+        return None
+    from services import edge_filter
+    st = edge_filter.settings(cfg)
+    if not (st.get("edge_filter_enabled") and st.get("edge_filter_require_bias")
+            and st.get("edge_filter_collection_counter_trend")):
+        return None
+    if edge_filter.counter_trend(side, bias):
+        return (f"{str(side).upper()} gegen Tages-Bias '{bias}' – weder live noch als Kontroll-Trade "
+                "möglich, KI-Prüfung gespart")
+    return None
