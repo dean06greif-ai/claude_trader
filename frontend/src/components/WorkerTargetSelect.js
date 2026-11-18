@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { useWorkerTarget } from '../lib/workerTarget';
+import { useWorkerTarget, workerLabel } from '../lib/workerTarget';
 
 const API_URL = process.env.REACT_APP_BACKEND_URL;
 
@@ -34,7 +34,7 @@ export default function WorkerTargetSelect({ area, execution, testPrefix }) {
         <option value="">Automatisch (freier Worker)</option>
         {workers.map(w => (
           <option key={w.worker_id} value={w.worker_id}>
-            {w.name || w.worker_id}{(w.running_jobs || []).length ? ` · ${(w.running_jobs || []).length} Job(s) aktiv` : ' · frei'}
+            {workerLabel(w, workers)}{(w.running_jobs || []).length ? ` · ${(w.running_jobs || []).length} Job(s) aktiv` : ' · frei'}
           </option>
         ))}
         {!targetOnline && <option value={target}>{target} (offline)</option>}

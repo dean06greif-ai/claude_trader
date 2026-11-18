@@ -2,7 +2,7 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Dict
+from typing import Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
@@ -253,7 +253,7 @@ async def backtest_resume(job_id: str, _: bool = Depends(require_admin)):
 
 
 @router.get("/api/backtest/active")
-async def backtest_active():
+async def backtest_active(mine: Optional[str] = None):
     """Läuft gerade ein Backtest? (für Fortschritt nach erneutem Öffnen des Popups)"""
     running = [j for j in bt.JOBS.values() if j["status"] == "running"]
     if not running and state.db is not None:
@@ -261,7 +261,14 @@ async def backtest_active():
         if await local_exec.restore_running_jobs(state.db, "backtest"):
             running = [j for j in bt.JOBS.values() if j["status"] == "running"]
     if running:
-        return {"active": _job_public(running[-1])}
+        # 18.11.2026: eigene Läufe (vom Browser gemerkt) zuerst – nicht den des anderen Nutzers
+        from services import job_ownership as jo
+        mine = jo.parse_mine(mine)
+        act, others = jo.pick_active(bt.JOBS, mine)
+        out = _job_public(act)
+        if mine:
+            out["mine"] = act.get("id") in mine
+        return {"active": out, "others": [jo.other_summary(o) for o in others]}
     done = sorted([j for j in bt.JOBS.values() if j["status"] in ("done", "error", "cancelled")],
                   key=lambda x: x["created_at"])
     return {"active": None, "last": _job_public(done[-1]) if done else None}
@@ -274,16 +281,17 @@ async def backtest_results(limit: int = 5):
 
 
 @router.post("/api/backtest/reset")
-async def backtest_reset(_: bool = Depends(require_admin)):
+async def backtest_reset(body: Optional[Dict] = None, _: bool = Depends(require_admin)):
     """Notfall-Reset: hängende/geisterhafte Backtests freigeben."""
-    n = 0
-    for j in bt.JOBS.values():
-        if j.get("status") == "running":
-            j["cancel"] = True
-            j["status"] = "cancelled"
-            j["phase"] = "Zurückgesetzt (Notfall-Reset)"
-            n += 1
-    return {"status": "reset", "cleared": n}
+    # 18.11.2026: nur der eigene Lauf (job_id) bzw. wirklich hängende – nicht der Lauf,
+    # den gerade jemand anderes (oder dessen Worker) gesund rechnet
+    from services import job_ownership as jo, local_exec
+    targets = jo.reset_targets(bt.JOBS, (body or {}).get("job_id"), local_exec.job_is_stale)
+    for j in targets:
+        j["cancel"] = True
+        j["status"] = "cancelled"
+        j["phase"] = "Zurückgesetzt (Notfall-Reset)"
+    return {"status": "reset", "cleared": len(targets)}
 
 
 # ---- Backtest-spezifische Strategie-Einstellungen (getrennt von Live/Paper) ----

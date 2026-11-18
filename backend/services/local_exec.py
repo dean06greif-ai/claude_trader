@@ -92,10 +92,10 @@ def payload_input_hash(payload: Dict) -> str:
 
 
 # ---------------- Worker-Registry ----------------
-REQUIRED_WORKER_VERSION = (1, 31, 0)
+REQUIRED_WORKER_VERSION = (1, 32, 0)
 # Job-IDs, die der Worker selbst erzeugt (worker.AUTO_JOB_PREFIX) – dem Server unbekannt
 WORKER_LOCAL_PREFIX = "auto-"
-REQUIRED_WORKER_VERSION_STR = "1.31.0"
+REQUIRED_WORKER_VERSION_STR = "1.32.0"
 LOST_JOB_GRACE = 20        # Sekunden nach dem Claim, bevor ein vom Worker nicht mehr
                            # gemeldeter Job als verloren gilt (Worker-Neustart)
 LOST_JOB_POLLS = 3         # ... und so viele Heartbeats in Folge ohne den Job
@@ -183,6 +183,28 @@ DATA_REPAIR_MIN_VERSION = (1, 17)
 # 1.22: vorher scheiterte er auf dem Worker an "No module named 'telegram'"
 DYNAMIC_BACKTEST_MIN_VERSION = (1, 22)
 AI_SEED_MIN_VERSION = (1, 21)
+# 18.11.2026: Kopien von Built-in-Strategien („variant_…“) rechnen in Kind-Prozessen
+# erst ab 1.32 (vorher „Strategie variant_… nicht gefunden“)
+VARIANT_MIN_VERSION = (1, 32, 0)
+VARIANT_MIN_VERSION_STR = "1.32.0"
+
+
+def uses_variant(item: Dict) -> bool:
+    """Rechnet der Auftrag eine Strategie-Kopie selbst (nicht nur als Regel-Suche)? (rein)"""
+    payload = (item or {}).get("payload") or {}
+    variants = {d.get("id") for d in (payload.get("custom_definitions") or [])
+                if isinstance(d, dict) and d.get("kind") == "variant"}
+    if not variants:
+        return False
+    args = payload.get("args") or {}
+    body = args.get("body") or {}
+    if item.get("kind") == "optimizer":
+        sids = {body.get("base_strategy_id")}
+        if (body.get("mode") or "params") in ("params", "dynamic"):
+            sids.add(body.get("strategy_id"))
+    else:
+        sids = set(args.get("strategy_ids") or [])
+    return bool(variants & {s for s in sids if s})
 
 
 def worker_supports(min_ver: tuple, worker_id: Optional[str] = None) -> bool:
@@ -296,6 +318,23 @@ def check_target(body: Optional[Dict]) -> Optional[str]:
         return (f"Der gewählte lokale Worker „{name}“ ist nicht verbunden – "
                 "anderen Worker wählen oder Worker starten")
     return None
+
+
+def job_is_stale(job: Dict, max_age_s: float = 180.0) -> bool:
+    """Hängt dieser Lauf? (Notfall-Reset ohne Job-ID, 18.11.2026) Cloud-Läufe: ja (wie
+    bisher). Lokale: nur, wenn sein Worker weg ist oder er sich > max_age_s nicht meldete –
+    ein gesund rechnender Lauf (z. B. auf dem PC des Kumpels) bleibt unberührt."""
+    if (job or {}).get("execution") != "local":
+        return True
+    meta = LOCAL_JOBS.get(job.get("id"))
+    if not meta:
+        return True
+    if meta.get("state") != "claimed":
+        return False
+    wid = meta.get("worker_id")
+    if not wid or not worker_is_online(wid):
+        return True
+    return _now() - float(meta.get("last_update") or 0) > max_age_s
 
 
 def job_worker(job_id: str) -> Optional[str]:
@@ -714,15 +753,19 @@ def enqueue_compute(kind: str, job_id: str, payload: Dict, worker_id: Optional[s
     logger.info(f"local_exec: enqueued {kind} job {job_id}")
 
 
-def create_data_job(kind: str, params: Dict) -> Dict:
+def create_data_job(kind: str, params: Dict, target: Optional[str] = None) -> Dict:
+    """Daten-Auftrag; `target` = Worker, auf dessen PC die Daten sollen (18.11.2026:
+    vorher landete ein Download beim Worker, der zuerst fragte – z. B. beim Kumpel)."""
     jid = "d" + uuid.uuid4().hex[:11]
+    name = ((WORKERS.get(target) or {}).get("name") or target) if target else None
     DATA_JOBS[jid] = {"id": jid, "kind": kind, "params": params, "status": "queued",
-                      "progress": 0, "phase": "Wartet auf lokalen Worker...",
+                      "progress": 0,
+                      "phase": f"Wartet auf Worker {name}..." if name else "Wartet auf lokalen Worker...",
                       "cancel": False, "created_at": _iso(), "error": None,
-                      "summary": None, "execution": "local"}
+                      "summary": None, "execution": "local", "target": target}
     DATA_QUEUE.append(jid)
     LOCAL_JOBS[jid] = {"kind": kind, "state": "queued", "enqueued_at": _now(),
-                       "last_update": _now(), "worker_id": None}
+                       "last_update": _now(), "worker_id": None, "target": target}
     if len(DATA_JOBS) > 20:
         for k in [k for k, v in list(DATA_JOBS.items())
                   if v["status"] in ("done", "error", "cancelled")][:-10]:
@@ -734,6 +777,8 @@ def create_data_job(kind: str, params: Dict) -> Dict:
 def claim(worker_id: str, want_compute: bool = True, want_data: bool = True) -> Optional[Dict]:
     """Nächsten Job an den Worker vergeben (Daten-Jobs zuerst, sie sind IO-bound)."""
     if want_data:
+        held = []                       # Daten-Aufträge für einen anderen Worker
+        picked = None
         while DATA_QUEUE:
             jid = DATA_QUEUE.pop(0)
             dj = DATA_JOBS.get(jid)
@@ -743,6 +788,15 @@ def claim(worker_id: str, want_compute: bool = True, want_data: bool = True) -> 
                     dj["phase"] = "Abgebrochen"
                 LOCAL_JOBS.pop(jid, None)
                 continue
+            if dj.get("target") and dj["target"] != worker_id:
+                held.append(jid)
+                continue
+            picked = jid
+            break
+        DATA_QUEUE[:0] = held
+        if picked is not None:
+            jid = picked
+            dj = DATA_JOBS[jid]
             dj["status"] = "running"
             dj["phase"] = "Vom Worker übernommen..."
             meta = LOCAL_JOBS.setdefault(jid, {"kind": dj["kind"], "enqueued_at": _now()})
@@ -767,6 +821,15 @@ def claim(worker_id: str, want_compute: bool = True, want_data: bool = True) -> 
                     continue
             # KI-Trader-Lab lokal erst ab Worker 1.21 (MemDB + Replay)
             if item["kind"] == "ai_seed" and w_ver < AI_SEED_MIN_VERSION:
+                skipped.append(item)
+                continue
+            # Strategie-Kopien erst ab 1.32 (ältere Worker scheitern im Kind-Prozess)
+            if item["kind"] in ("optimizer", "backtest") and w_ver < VARIANT_MIN_VERSION \
+                    and uses_variant(item):
+                _wjob = _get_job(item["job_id"], item["kind"])
+                if _wjob is not None:
+                    _wjob["phase"] = (f"Wartet auf einen Worker ab Version {VARIANT_MIN_VERSION_STR} "
+                                      "(Kopie einer Strategie) – Worker-Paket neu laden")
                 skipped.append(item)
                 continue
             # Dynamische Strategien im Backtest nur an Worker, die den Pfad kennen

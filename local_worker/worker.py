@@ -72,7 +72,7 @@ import time
 import uuid
 from pathlib import Path
 
-VERSION = "1.31.0"
+VERSION = "1.32.0"
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = SCRIPT_DIR / "worker_config.json"
 # Zweiter Speicherort im Benutzerordner: überlebt das Neu-Entpacken des Pakets
@@ -113,6 +113,16 @@ def save_config(cfg):
             pass
 
 
+def default_worker_name() -> str:
+    """Rechnername (Windows: COMPUTERNAME), sonst Hostname."""
+    import socket
+    host = os.environ.get("COMPUTERNAME") or ""
+    if not host and hasattr(os, "uname"):
+        host = os.uname().nodename
+    host = host or socket.gethostname() or "Worker"
+    return str(host).strip()[:40] or "Worker"
+
+
 def load_config():
     cfg = _read_json(CONFIG_PATH)
     user_cfg = _read_json(USER_CONFIG_PATH)
@@ -137,8 +147,10 @@ def load_config():
         token = input("Worker-Token (Website: Ausführung → Lokal → ⚙ Verwalten): ").strip()
     cfg["server_url"] = server.rstrip("/")
     cfg["token"] = token
-    cfg["name"] = args.name or cfg.get("name") or os.environ.get(
-        "COMPUTERNAME") or os.uname().nodename if hasattr(os, "uname") else "Worker"
+    # 18.11.2026: vorher hieß jeder Windows-Worker „Worker“ (Klammer-Fehler im Ausdruck) –
+    # mit zwei PCs waren die Worker auf der Website nicht zu unterscheiden.
+    saved = cfg.get("name") if cfg.get("name") not in (None, "", "Worker") else None
+    cfg["name"] = args.name or saved or default_worker_name()
     cfg.setdefault("worker_id", "w" + uuid.uuid4().hex[:11])
     cfg["data_dir"] = args.data_dir or cfg.get("data_dir") or str(SCRIPT_DIR / "worker_data")
     save_config(cfg)
@@ -248,7 +260,7 @@ def apply_settings(settings):
     if _last_ram_budget != ram_mb:
         _last_ram_budget = ram_mb
         log(f"Kerzen-Cache-Budget: {ram_mb} MB (~{max_candles // 1_000_000} Mio. Kerzen)"
-            + (" – automatisch (ganzer RAM minus 1 GB)" if not SETTINGS.get("ram_limit_mb") else ""))
+            + (" – automatisch (halber RAM)" if not SETTINGS.get("ram_limit_mb") else ""))
     # candle_cache liest das Limit beim Import – bereits geladen? Dann live setzen.
     cc = sys.modules.get("services.candle_cache")
     if cc is not None and getattr(cc, "MAX_CANDLES_IN_MEMORY", None) != max_candles:
@@ -279,10 +291,12 @@ def apply_settings(settings):
 
 
 def auto_ram_mb():
+    """Automatisches Kerzen-Budget: halber RAM (18.11.2026; vorher ganzer RAM minus
+    1 GB – zusammen mit bis zu 12 Rechenprozessen lief der PC voll und der Worker hing)."""
     try:
         import psutil
         total = int(psutil.virtual_memory().total / (1024 * 1024))
-        return max(total - 1024, 512)
+        return max(total // 2, 1024)
     except Exception:  # noqa: BLE001
         return 4096
 

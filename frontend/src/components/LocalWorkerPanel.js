@@ -7,6 +7,7 @@ import './LocalWorkerPanel.css';
 import { assetLabel } from '../hooks/useInstruments';
 import { fmtDate, fmtShort } from '../lib/time';
 import NumInput from './NumInput';
+import { useWorkerTarget, workerLabel } from '../lib/workerTarget';
 
 const API_URL = process.env.REACT_APP_BACKEND_URL;
 
@@ -91,8 +92,14 @@ export default function LocalWorkerPanel({ onClose }) {
     return () => clearInterval(pollRef.current);
   }, [load, loadToken]);
 
-  const worker = (status?.workers || []).find(w => w.online) || (status?.workers || [])[0];
+  // 18.11.2026: Mehrere Worker – welcher wird angezeigt/gesteuert (Daten-Aufträge gehen an ihn)?
+  const [selWid, setSelWid] = useWorkerTarget('panel');
+  const [setupOpen, setSetupOpen] = useState(false);
+  const onlineWorkers = (status?.workers || []).filter(w => w.online);
+  const worker = onlineWorkers.find(w => w.worker_id === selWid) || onlineWorkers[0]
+    || (status?.workers || [])[0];
   const online = !!status?.online;
+  const targetBody = (worker && onlineWorkers.length > 1) ? { worker_id: worker.worker_id } : {};
   const res = worker?.resources || {};
   const data = worker?.data || {};
   const dataJob = status?.data_jobs?.active;
@@ -119,7 +126,7 @@ export default function LocalWorkerPanel({ onClose }) {
     try {
       const r = await fetch(`${API_URL}/api/localworker/data/download`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify({ symbols: dlCoins, days: dlDays }),
+        body: JSON.stringify({ symbols: dlCoins, days: dlDays, ...targetBody }),
       });
       const d = await r.json();
       if (!r.ok) { toast.error(d.detail || 'Start fehlgeschlagen'); return; }
@@ -131,7 +138,8 @@ export default function LocalWorkerPanel({ onClose }) {
   const updateAll = async () => {
     try {
       const r = await fetch(`${API_URL}/api/localworker/data/update`, {
-        method: 'POST', headers: authHeaders(),
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ ...targetBody }),
       });
       const d = await r.json();
       if (!r.ok) { toast.error(d.detail || 'Start fehlgeschlagen'); return; }
@@ -144,7 +152,7 @@ export default function LocalWorkerPanel({ onClose }) {
     try {
       const r = await fetch(`${API_URL}/api/localworker/data/delete`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify({ symbol: sym }),
+        body: JSON.stringify({ symbol: sym, ...targetBody }),
       });
       const d = await r.json();
       if (!r.ok) { toast.error(d.detail || 'Löschen fehlgeschlagen'); return; }
@@ -157,7 +165,7 @@ export default function LocalWorkerPanel({ onClose }) {
     try {
       const r = await fetch(`${API_URL}/api/localworker/data/repair`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify({ symbol: sym }),
+        body: JSON.stringify({ symbol: sym, ...targetBody }),
       });
       const d = await r.json();
       if (!r.ok) { toast.error(d.detail || 'Reparatur fehlgeschlagen'); return; }
@@ -241,7 +249,7 @@ export default function LocalWorkerPanel({ onClose }) {
         <div className="lw-status" data-testid="lw-status">
           <span className={`lw-dot ${online ? 'on' : ''}`} data-testid="lw-status-dot" />
           <span className="lw-status-name">
-            {online ? `Worker verbunden: ${worker?.name || '–'}` : 'Kein Worker verbunden'}
+            {online ? `Worker verbunden: ${workerLabel(worker, onlineWorkers)}` : 'Kein Worker verbunden'}
           </span>
           {worker && (
             <span className="lw-status-meta" data-testid="lw-status-meta">
@@ -253,7 +261,8 @@ export default function LocalWorkerPanel({ onClose }) {
             </span>
           )}
         </div>
-        <WorkerList status={status} />
+        <WorkerList status={status} selected={worker?.worker_id} onSelect={setSelWid}
+          onConnectMore={() => { setSetupOpen(true); setShowToken(true); }} />
         {worker && worker.outdated && (
           <div className="lw-hint" data-testid="lw-outdated-warning"
             style={{ borderLeft: '2px solid #ffb454', paddingLeft: 8, marginTop: 6 }}>
@@ -270,8 +279,9 @@ export default function LocalWorkerPanel({ onClose }) {
         )}
 
         {/* ---- Einrichtung ---- */}
-        <details className="lw-section" open={!online} data-testid="lw-setup">
-          <summary><Key size={14} weight="bold" /> Einrichtung (einmalig)</summary>
+        <details className="lw-section" open={!online || setupOpen} data-testid="lw-setup"
+          onToggle={e => setSetupOpen(e.currentTarget.open)}>
+          <summary><Key size={14} weight="bold" /> Einrichtung / weiteren Worker verbinden</summary>
           <ol className="lw-steps">
             <li>
               Worker-Paket herunterladen und entpacken:{' '}
@@ -487,7 +497,7 @@ export default function LocalWorkerPanel({ onClose }) {
 
 
 // Multi-Worker: alle verbundenen Worker (max. 2) + wartende über dem Limit
-function WorkerList({ status }) {
+function WorkerList({ status, selected, onSelect, onConnectMore }) {
   const online = (status?.workers || []).filter(w => w.online);
   const waiting = status?.waiting_workers || [];
   const max = status?.max_workers || 2;
@@ -495,15 +505,22 @@ function WorkerList({ status }) {
     return (
       <div className="lw-hint" style={{ opacity: 0.75 }} data-testid="lw-multi-hint">
         Mehrere PCs möglich: bis zu {max} Worker gleichzeitig (gleiches Token, eigener Worker-Name) – beim Start eines Jobs wählst du dann, welcher Worker rechnet.
+        {online.length > 0 && online.length < max && onConnectMore && (
+          <button className="lw-mini" style={{ marginLeft: 8 }} onClick={onConnectMore}
+            data-testid="lw-connect-more">Weiteren Worker verbinden</button>
+        )}
       </div>
     );
   }
   return (
     <div className="lw-hint" data-testid="lw-worker-list">
-      <b>Verbundene Worker ({online.length}/{max}):</b>
+      <b>Verbundene Worker ({online.length}/{max}) – anklicken zum Anzeigen/Steuern:</b>
       {online.map(w => (
-        <div key={w.worker_id} data-testid={`lw-worker-${w.worker_id}`}>
-          • {w.name || w.worker_id}{w.version ? ` · v${w.version}` : ''} · {(w.running_jobs || []).length ? `${w.running_jobs.length} Job(s) aktiv` : 'frei'}
+        <div key={w.worker_id} data-testid={`lw-worker-${w.worker_id}`}
+          onClick={() => onSelect && onSelect(w.worker_id)}
+          style={{ cursor: 'pointer', fontWeight: w.worker_id === selected ? 700 : 400,
+            color: w.worker_id === selected ? '#7CFFB2' : undefined }}>
+          {w.worker_id === selected ? '▸' : '•'} {workerLabel(w, online)}{w.version ? ` · v${w.version}` : ''} · {(w.running_jobs || []).length ? `${w.running_jobs.length} Job(s) aktiv` : 'frei'}
         </div>
       ))}
       {waiting.map(w => (

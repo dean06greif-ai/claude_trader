@@ -60,9 +60,21 @@ def _child_should_stop() -> bool:
     return False
 
 
+CHILD_RAM_MB = 450          # grob: ein Kind-Prozess mit allen Modulen (Windows: spawn)
+RAM_RESERVE_MB = 1500       # für Hauptprozess, Kerzen und Betriebssystem
+
+
+def ram_capped_workers(n: int, avail_mb: float) -> int:
+    """Nicht mehr Prozesse starten, als freier RAM trägt (rein). Vorher: 12 Prozesse auf
+    einem PC mit 0,1 GB freiem RAM -> Auslagern, Worker hing (18.11.2026)."""
+    if avail_mb <= 0:
+        return n
+    return max(1, min(n, int((avail_mb - RAM_RESERVE_MB) // CHILD_RAM_MB)))
+
+
 def workers_configured() -> int:
     """SIM_WORKERS: nicht gesetzt -> 1 (sequenziell, Server-Default),
-    0 -> alle CPU-Kerne, N -> min(N, Kerne)."""
+    0 -> alle CPU-Kerne, N -> min(N, Kerne). Begrenzt durch den freien RAM."""
     raw = os.environ.get("SIM_WORKERS")
     if raw is None:
         return 1
@@ -71,7 +83,13 @@ def workers_configured() -> int:
     except ValueError:
         return 1
     cores = os.cpu_count() or 1
-    return cores if n <= 0 else min(n, cores)
+    n = cores if n <= 0 else min(n, cores)
+    try:
+        import psutil
+        n = ram_capped_workers(n, psutil.virtual_memory().available / (1024 * 1024))
+    except Exception:  # noqa: BLE001 – ohne psutil wie bisher
+        pass
+    return n
 
 
 def _init_spawn(data: Dict[str, List[Dict]], pause_evt=None):
@@ -142,7 +160,13 @@ def strategy_spec(strategy) -> Dict:
     """Picklebare Beschreibung einer Strategie für den Kind-Prozess."""
     if getattr(strategy, "IS_CUSTOM", False):
         return {"definition": dict(strategy.definition)}
-    return {"strategy_id": strategy.STRATEGY_ID}
+    spec = {"strategy_id": strategy.STRATEGY_ID}
+    # 18.11.2026: Kopien von Built-in-Strategien („variant_…“) existieren nur in der
+    # Registry des Auftrags (lokaler Worker: eigene Registry je Job, Windows: spawn).
+    # Der Kind-Prozess kennt sie nicht -> Definition mitschicken.
+    if getattr(strategy, "IS_VARIANT", False) and getattr(strategy, "variant_definition", None):
+        spec["variant"] = dict(strategy.variant_definition)
+    return spec
 
 
 def _strategy_from_spec(spec: Dict):
@@ -151,6 +175,8 @@ def _strategy_from_spec(spec: Dict):
         return CustomStrategy(spec["definition"])
     from strategies.registry import registry
     strat = registry.get(spec.get("strategy_id"))
+    if strat is None and spec.get("variant"):
+        strat = registry.upsert_variant(spec["variant"])
     if strat is None:
         raise RuntimeError(f"Strategie {spec.get('strategy_id')} nicht gefunden")
     return strat

@@ -29,3 +29,12 @@ export function useWorkerTarget(area) {
   }, [area]);
   return [target, (id) => setWorkerTarget(area, id)];
 }
+
+// Anzeigename eines Workers; bei gleichen Namen (ältere Worker hießen alle „Worker“)
+// mit ID-Ende und Daten-Ordner, damit zwei PCs unterscheidbar sind (18.11.2026)
+export function workerLabel(w, all = []) {
+  const name = (w && (w.name || w.worker_id)) || '–';
+  const dup = all.filter(x => (x.name || x.worker_id) === name).length > 1;
+  const dir = String((w && w.data_dir) || '').split(/[\\/]/).filter(Boolean).slice(-2).join('/');
+  return dup ? `${name} …${String(w.worker_id).slice(-4)}${dir ? ` (${dir})` : ''}` : name;
+}

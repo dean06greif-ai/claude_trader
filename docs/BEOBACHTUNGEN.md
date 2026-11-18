@@ -4,6 +4,40 @@ Geführt von den automatischen Pflege-Läufen (geplante Aufgabe „Krypto-Websit
 Hand. Neueste Einträge oben. Einträge älter als 6 Wochen werden zu einer kurzen
 Zusammenfassung verdichtet.
 
+## 2026-11-18 (spät, von Hand – zwei Nutzer, zwei Worker)
+
+**Befunde (Produktion, nur lesend):**
+- Optimizer auf dem lokalen Worker (Windows): „Strategie variant_3f23fd34 nicht gefunden“ –
+  Kopien von Built-in-Strategien existierten nur in der Job-Registry des Workers, die
+  Rechenprozesse kannten sie nicht (Parameter-Modus; die Endlos-Suche lief, weil sie Kandidaten
+  als Definition schickt).
+- Zwei Worker verbunden (PC des Traders, PC des Kumpels), beide hießen „Worker“ (Klammer-Fehler
+  im Standardnamen unter Windows) – auf der Website nicht unterscheidbar.
+- Daten-Aufträge hatten kein Ziel: Der Download „BTCUSDT 90 Tage“ des Traders landete beim
+  Worker des Kumpels.
+- Der Worker des Traders hatte 0,1 GB freien RAM bei 100 % CPU und fiel aus (Kerzen-Budget
+  „ganzer RAM minus 1 GB“ plus 12 Rechenprozesse). Sein neuer Daten-Ordner war leer – die alten
+  Daten liegen im Ordner aus der globalen Einstellung („krypto_local_worker Neu 16.8“).
+- `/api/optimizer/active` zeigte immer den neuesten Lauf (oft den des anderen); der Notfall-Reset
+  brach ALLE laufenden Läufe ab (ein Lauf des Traders: „Zurückgesetzt (Notfall-Reset)“).
+- Einrichtung/Token im Worker-Panel war eingeklappt, sobald ein Worker verbunden war.
+- „Empfohlene Einstellungen“ setzten Zusatz-Filter (Konstanz, Drawdown …), Basis-Strategie,
+  Sessions und Regel-Timeframes nicht zurück; Hinweistexte nannten noch 15m/180 Tage.
+
+**Geändert (Worker 1.32.0 – Paket neu laden):**
+- Strategie-Kopien in den Rechenprozessen (Definition reist mit), Aufträge mit Kopien gehen nur
+  an Worker ≥ 1.32 (Hinweis im Lauf).
+- Worker-Name = Rechnername; Kerzen-Budget automatisch halber RAM; Anzahl Rechenprozesse nach
+  freiem RAM begrenzt (~450 MB je Prozess, 1,5 GB Reserve).
+- Binance: zuletzt funktionierender Host zuerst (vorher jeder Abruf erst beim Mirror).
+
+**Geändert (Website):**
+- Daten-Aufträge an den im Panel gewählten Worker; Panel zeigt/steuert den gewählten Worker,
+  gleiche Namen mit ID-Ende und Ordner; „Weiteren Worker verbinden“ öffnet Einrichtung + Token.
+- Eigene Läufe merkt sich der Browser: Anzeige bevorzugt den eigenen Lauf, Notfall-Reset trifft
+  nur ihn (ohne ID nur hängende Läufe: Worker weg oder > 3 min ohne Meldung).
+- „Empfohlene Einstellungen“ setzen alle Felder der Endlos-Suche, Texte stimmen (1h, 365 Tage).
+
 ## 2026-11-18 (Abend, von Hand)
 
 **Kennzahlen (Produktion, nur lesend):**
@@ -30,6 +64,14 @@ Zusammenfassung verdichtet.
   Archiv sichert jetzt automatisch alles von der Börse Geladene; alte Archivdateien werden
   gelesen und beim nächsten Sichern ins neue Format übernommen.
 - KI-Prüfung: Stichprobe (jede 3.), wenn die KI ein Setup fast nie nimmt (≤ 5 %, ≥ 10 Absagen).
+
+**Zwischenfall und Fix (gleicher Abend):** Der erste Deploy übernahm 17 alte Archivdateien
+(`migrated 17`). Der zweite (Archiv nur noch ab 30 Tagen) ließ den Boot-Backfill 14-Tage-Stände
+über diese langen Historien schreiben (`<symbol>.ckc`). Die alten Dateien `<symbol>.npy.gz` sind
+erhalten. Fix (1c76032, a930715): nie durch eine kürzere Historie überschreiben, Lesefehler
+werfen statt „leer“, kurze Historien (< 30 Tage) gar nicht sichern, kurze `.ckc` lesen die alte
+Datei mit und nehmen die beste lückenlose Historie -> die 17 Coins bekommen ihre lange Historie
+beim nächsten langen Lauf automatisch zurück (danach wird die volle Historie neu gesichert).
 
 **Beim nächsten Lauf prüfen:**
 1. `/api/system/ram` → `hourly_cache` (requests, archive_uploads) und `candle_archive`

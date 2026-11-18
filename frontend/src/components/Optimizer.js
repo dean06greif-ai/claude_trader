@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { mineQuery, rememberJob } from '../lib/myJobs';
 import { X, Play, Pause, MagicWand, Trophy, CheckCircle, FloppyDisk, ChartLine, Cloud, Desktop, Gear, ClockCounterClockwise, MoonStars } from '@phosphor-icons/react';
 import { toast } from '../lib/toast';
 import AssetPicker from './AssetPicker';
@@ -332,7 +333,7 @@ export default function Optimizer({ onClose }) {
       }
     }).catch(() => {});
     // Läuft gerade eine Optimierung? -> Fortschritt & Abbrechen wieder anzeigen
-    fetch(`${API_URL}/api/optimizer/active`).then(r => r.json()).then(d => {
+    fetch(`${API_URL}/api/optimizer/active${mineQuery('optimizer')}`).then(r => r.json()).then(d => {
       if (d.active) { setJob(d.active); poll(d.active.id); }
     }).catch(() => {});
     loadRam();
@@ -364,7 +365,7 @@ export default function Optimizer({ onClose }) {
           misses += 1;
           if (misses >= 8) {
             // Server bestätigt: läuft wirklich nichts mehr? Dann sauber beenden.
-            const a = await fetch(`${API_URL}/api/optimizer/active`)
+            const a = await fetch(`${API_URL}/api/optimizer/active${mineQuery('optimizer')}`)
               .then(x => x.json()).catch(() => null);
             if (a && !a.active) {
               clearInterval(pollRef.current);
@@ -445,7 +446,10 @@ export default function Optimizer({ onClose }) {
 
   const forceReset = async () => {
     try {
-      await fetch(`${API_URL}/api/optimizer/reset`, { method: 'POST', headers: authHeaders() });
+      await fetch(`${API_URL}/api/optimizer/reset`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ job_id: job?.id || null }),   // nur den eigenen Lauf
+      });
       if (pollRef.current) clearInterval(pollRef.current);
       setJob(null);
       toast.success('Optimizer zurückgesetzt – neue Läufe sind wieder möglich');
@@ -634,6 +638,7 @@ export default function Optimizer({ onClose }) {
       if (overrides?.symbols) setSelCoins(overrides.symbols);
       setResult(null);
       setApplied(false);
+      rememberJob('optimizer', d.job_id);
       setJob({ id: d.job_id, status: 'running', progress: 0, phase: 'Startet...' });
       poll(d.job_id);
     } catch { toast.error('Verbindungsfehler'); }
@@ -915,13 +920,22 @@ export default function Optimizer({ onClose }) {
             </div>
             <div className="opt-setup" style={{ marginTop: 6 }}>
               <button type="button" className="opt-cancel-run" data-testid="explore-recommended-btn"
-                title="Setzt Einstellungen, mit denen ein echter Vorteil überhaupt nachweisbar ist: 15m, 180 Tage, 2–3 Regeln, mind. 100 Trades, 70 % Training, alle Indikatoren, Ziel t-Wert (R), nur TP/SL mitoptimieren. Assets wählst du selbst: möglichst alle einer Klasse."
-                onClick={() => { setTimeframe('1h'); setDays(365); setMaxRules(3); setMinTrades(100); setWfTrainPct(70); setObjective('t_r'); setOptFlags({ tpsl: true }); setIndicators(INDICATOR_POOL.map(i => i.id)); toast.success('Empfohlene Einstellungen übernommen (1h, 365 Tage, Ziel t-Wert, 100 Trades, nur TP/SL) – bitte 15–30 Krypto-Coins wählen, gern auch aus „Weitere Coins“. Auf 5m/15m fressen die Gebühren fast jeden Vorteil.'); }}>
+                title="Setzt ALLE Einstellungen der Endlos-Suche auf den geprüften Stand: 1h, 365 Tage, bis 3 Regeln, mind. 100 Trades, 70 % Training, alle Indikatoren, Ziel t-Wert (R), nur TP/SL mitoptimieren, 24/7, keine Basis-Strategie, keine Zusatz-Filter (Drawdown, Konstanz, Stress, Stabilität, Monte-Carlo, Regime – die Champion-Prüfung mit Tresor-Daten übernimmt das). Assets wählst du selbst: möglichst alle einer Klasse."
+                onClick={() => {
+                  // 18.11.2026: vorher blieben Zusatz-Filter (z. B. Konstanz 20 %), Basis-Strategie,
+                  // Sessions und Regel-Timeframes vom letzten Lauf aktiv -> „nicht alles übernommen“
+                  setTimeframe('1h'); setDays(365); setMaxRules(3); setMinTrades(100); setWfTrainPct(70);
+                  setObjective('t_r'); setOptFlags({ tpsl: true }); setIndicators(INDICATOR_POOL.map(i => i.id));
+                  setRuleTf(prev => ({ ...prev, enabled: false })); setBaseStrategy(''); setOptSessions('');
+                  setDdEnabled(false); setCtEnabled(false); setStEnabled(false); setSbEnabled(false);
+                  setMcEnabled(false); setRgEnabled(false);
+                  toast.success('Empfohlene Einstellungen übernommen: 1h, 365 Tage, Ziel t-Wert, mind. 100 Trades, bis 3 Regeln, 70 % Training, nur TP/SL, 24/7, ohne Zusatz-Filter. Bitte 15–30 Krypto-Coins wählen, gern auch aus „Weitere Coins“. Auf 5m/15m fressen die Gebühren fast jeden Vorteil.');
+                }}>
                 Empfohlene Einstellungen
               </button>
               <span className="opt-small" data-testid="explore-power-hint">
                 Nachweis braucht genug Test-Trades: bei ~200 geprüften Kombis (Hürde t≈3,5) etwa 650 Test-Trades für +0,15 R
-                bzw. 240 für +0,25 R je Trade. Darum: viele Assets einer Klasse, 15m, 180–365 Tage, 2–3 Regeln.
+                bzw. 240 für +0,25 R je Trade. Darum: viele Assets einer Klasse, 1h, 365 Tage, 2–3 Regeln.
                 {selCoins.length > 0 && selCoins.length < 5 ? ` · Aktuell nur ${selCoins.length} Asset(s) – meist zu wenig.` : ''}
               </span>
             </div>

@@ -41,6 +41,21 @@ BINANCE_HOSTS = [
     "https://api4.binance.com/api/v3/klines",
 ]
 BINANCE_ATTEMPTS = 8
+# 18.11.2026: zuletzt erfolgreicher Host zuerst. Vorher begann JEDER Abruf beim
+# Daten-Mirror – ist der im Netz des PCs langsam/gesperrt, kostete das bei Tausenden
+# Abrufen jedes Mal Timeout + Wartezeit (lange Ladezeiten auf dem Worker).
+_BINANCE_PREF = [0]
+
+
+def binance_host(attempt: int) -> str:
+    return BINANCE_HOSTS[(_BINANCE_PREF[0] + attempt) % len(BINANCE_HOSTS)]
+
+
+def binance_ok(url: str) -> None:
+    try:
+        _BINANCE_PREF[0] = BINANCE_HOSTS.index(url)
+    except ValueError:
+        pass
 BITUNIX_URL = "https://fapi.bitunix.com/api/v1/futures/market/kline"
 YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{}"
 
@@ -191,9 +206,10 @@ async def fetch_binance(session, ref: str, start_ms: int, end_ms: int,
         data = None
         last_err = ""
         for attempt in range(BINANCE_ATTEMPTS):
-            url = BINANCE_HOSTS[attempt % len(BINANCE_HOSTS)]
+            url = binance_host(attempt)
             try:
                 data = await _get_json_checked(session, url, params)
+                binance_ok(url)
                 break
             except RateLimited as e:
                 last_err = str(e)

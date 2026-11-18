@@ -128,8 +128,9 @@ def test_claim_keeps_payload_for_requeue():
 
 def test_required_version_bumped():
     # 16.11.2026: 1.30.0 (Worker-Paket mit dem Testdaten-Fix der Endlossuche)
-    assert local_exec.REQUIRED_WORKER_VERSION == (1, 31, 0)
-    assert local_exec.REQUIRED_WORKER_VERSION_STR == "1.31.0"
+    # 18.11.2026: 1.32.0 (Strategie-Kopien im Kind-Prozess, Worker-Name, RAM-Grenzen)
+    assert local_exec.REQUIRED_WORKER_VERSION == (1, 32, 0)
+    assert local_exec.REQUIRED_WORKER_VERSION_STR == "1.32.0"
 
 
 # ---------------- worker.py (Quelltext-Verträge) ----------------

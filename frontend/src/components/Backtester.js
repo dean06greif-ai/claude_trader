@@ -1,4 +1,5 @@
 import ExecCfgFields, { LimitFillSelect } from './ExecCfgFields';
+import { mineQuery, rememberJob } from '../lib/myJobs';
 import BacktestRobustness, { BacktestRobustnessFields, DEFAULT_BT_ROBUST, robustActive } from './BacktestRobustness';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { X, Play, Pause, Trophy, ClockCounterClockwise, Gear, DownloadSimple, ArrowCounterClockwise, Cloud, Desktop, MoonStars } from '@phosphor-icons/react';
@@ -170,7 +171,7 @@ export default function Backtester({ onClose }) {
       if (last?.result) { setResult(last.result); setResultId(last.id); }
     }).catch(() => {});
     // Läuft gerade ein Backtest? -> Fortschritt wieder anzeigen (persistent)
-    fetch(`${API_URL}/api/backtest/active`).then(r => r.json()).then(d => {
+    fetch(`${API_URL}/api/backtest/active${mineQuery('backtest')}`).then(r => r.json()).then(d => {
       if (d.active) { setJob(d.active); poll(d.active.id); }
     }).catch(() => {});
     loadRam();
@@ -254,7 +255,7 @@ export default function Backtester({ onClose }) {
         if (!r.ok || !j || !j.status) {
           misses += 1;
           if (misses >= 8) {
-            const a = await fetch(`${API_URL}/api/backtest/active`)
+            const a = await fetch(`${API_URL}/api/backtest/active${mineQuery('backtest')}`)
               .then(x => x.json()).catch(() => null);
             if (a && !a.active) {
               clearInterval(pollRef.current);
@@ -312,7 +313,10 @@ export default function Backtester({ onClose }) {
 
   const forceReset = async () => {
     try {
-      await fetch(`${API_URL}/api/backtest/reset`, { method: 'POST', headers: authHeaders() });
+      await fetch(`${API_URL}/api/backtest/reset`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ job_id: job?.id || null }),   // nur den eigenen Lauf
+      });
       if (pollRef.current) clearInterval(pollRef.current);
       setJob(null);
       toast.success('Backtester zurückgesetzt – neue Läufe sind wieder möglich');
@@ -482,6 +486,7 @@ export default function Backtester({ onClose }) {
       if (!res.ok) { toast.error(d.detail || 'Start fehlgeschlagen'); return; }
       setResult(null);
       setResultId(null);
+      rememberJob('backtest', d.job_id);
       setJob({ id: d.job_id, status: 'running', progress: 0, phase: 'Startet...' });
       poll(d.job_id);
     } catch { toast.error('Verbindungsfehler'); }

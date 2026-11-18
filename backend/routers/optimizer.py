@@ -100,7 +100,7 @@ async def start_optimizer(body: Dict, _: bool = Depends(require_admin)):
             "args": {"body": body, "settings": dict(scanner.settings),
                      "default_cfg": dict(DEFAULT_COIN_CFG)},
             "custom_definitions": strategy_registry.list_custom_definitions(),
-        })
+        }, worker_id=local_exec.target_from_body(body))   # 18.11.: gewählter Worker galt nicht
         return {"status": "started", "job_id": job_id, "execution": "local"}
     job_id = opt.create_job(params)
     queued = ram_queue.submit(opt.JOBS, job_id, lambda: opt.run_optimizer(
@@ -110,16 +110,17 @@ async def start_optimizer(body: Dict, _: bool = Depends(require_admin)):
 
 
 @router.post("/api/optimizer/reset")
-async def optimizer_reset(_: bool = Depends(require_admin)):
+async def optimizer_reset(body: Optional[Dict] = None, _: bool = Depends(require_admin)):
     """Notfall-Reset: hängende/geisterhafte Optimierungen freigeben."""
-    n = 0
-    for j in opt.JOBS.values():
-        if j.get("status") == "running":
-            j["cancel"] = True
-            j["status"] = "cancelled"
-            j["phase"] = "Zurückgesetzt (Notfall-Reset)"
-            n += 1
-    return {"status": "reset", "cleared": n}
+    # 18.11.2026: nur der eigene Lauf (job_id) bzw. wirklich hängende – nicht der Lauf,
+    # den gerade jemand anderes (oder dessen Worker) gesund rechnet
+    from services import job_ownership as jo, local_exec
+    targets = jo.reset_targets(opt.JOBS, (body or {}).get("job_id"), local_exec.job_is_stale)
+    for j in targets:
+        j["cancel"] = True
+        j["status"] = "cancelled"
+        j["phase"] = "Zurückgesetzt (Notfall-Reset)"
+    return {"status": "reset", "cleared": len(targets)}
 
 
 @router.post("/api/optimizer/explore/stop/{job_id}")
@@ -208,7 +209,7 @@ async def optimizer_resume(job_id: str, _: bool = Depends(require_admin)):
 
 
 @router.get("/api/optimizer/active")
-async def optimizer_active():
+async def optimizer_active(mine: Optional[str] = None):
     """Läuft gerade eine Optimierung? (Fortschritt bleibt nach Schließen sichtbar)"""
     running = [j for j in opt.JOBS.values() if j["status"] == "running"]
     if not running and state.db is not None:
@@ -217,7 +218,14 @@ async def optimizer_active():
         if await local_exec.restore_running_jobs(state.db, "optimizer"):
             running = [j for j in opt.JOBS.values() if j["status"] == "running"]
     if running:
-        return {"active": _job_public(running[-1])}
+        # 18.11.2026: eigene Läufe (vom Browser gemerkt) zuerst – nicht den des anderen Nutzers
+        from services import job_ownership as jo
+        mine = jo.parse_mine(mine)
+        act, others = jo.pick_active(opt.JOBS, mine)
+        out = _job_public(act)
+        if mine:
+            out["mine"] = act.get("id") in mine
+        return {"active": out, "others": [jo.other_summary(o) for o in others]}
     done = sorted([j for j in opt.JOBS.values() if j["status"] in ("done", "error", "cancelled")],
                   key=lambda x: x["created_at"])
     return {"active": None, "last": _job_public(done[-1]) if done else None}

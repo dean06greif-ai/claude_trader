@@ -181,9 +181,10 @@ async def _fetch(session, symbol: str, start_ms: int, end_ms: int, job: Dict = N
                   "limit": 1000}
         data, last_err = None, ""
         for attempt in range(hs.BINANCE_ATTEMPTS):
-            url = hs.BINANCE_HOSTS[attempt % len(hs.BINANCE_HOSTS)]
+            url = hs.binance_host(attempt)
             try:
                 data = await hs._get_json_checked(session, url, params)
+                hs.binance_ok(url)
                 break
             except hs.RateLimited as e:
                 last_err = str(e)

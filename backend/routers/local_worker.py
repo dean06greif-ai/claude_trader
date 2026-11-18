@@ -12,7 +12,7 @@ import os
 import logging
 import zipfile
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
@@ -149,23 +149,32 @@ async def localworker_token_regenerate(_: bool = Depends(require_admin)):
 
 
 # ---- Daten-Verwaltung (Downloads laufen als Jobs auf dem Worker) ----
+def _data_target(body: Optional[Dict]) -> Optional[str]:
+    """Ziel-Worker eines Daten-Auftrags (18.11.2026): die Daten liegen auf genau EINEM PC.
+    Gewählter Worker muss verbunden sein; ohne Wahl und mit nur einem Worker -> der."""
+    if not local_exec.worker_online():
+        raise HTTPException(status_code=503, detail="Kein lokaler Worker verbunden")
+    err = local_exec.check_target(body)
+    if err:
+        raise HTTPException(status_code=503, detail=err)
+    return local_exec.target_from_body(body)
+
+
 @router.post("/api/localworker/data/download")
 async def localworker_data_download(body: Dict, _: bool = Depends(require_admin)):
     symbols = [s for s in (body.get("symbols") or []) if s in BACKTEST_SYMBOLS]
     if not symbols:
         raise HTTPException(status_code=400, detail="Mindestens 1 gültiger Coin erforderlich")
     days = min(max(int(body.get("days") or 30), 1), 5500)
-    if not local_exec.worker_online():
-        raise HTTPException(status_code=503, detail="Kein lokaler Worker verbunden")
-    job = local_exec.create_data_job("data_download", {"symbols": symbols, "days": days})
+    target = _data_target(body)
+    job = local_exec.create_data_job("data_download", {"symbols": symbols, "days": days}, target)
     return {"status": "queued", "job": job}
 
 
 @router.post("/api/localworker/data/update")
-async def localworker_data_update(_: bool = Depends(require_admin)):
-    if not local_exec.worker_online():
-        raise HTTPException(status_code=503, detail="Kein lokaler Worker verbunden")
-    job = local_exec.create_data_job("data_update", {})
+async def localworker_data_update(body: Optional[Dict] = None, _: bool = Depends(require_admin)):
+    target = _data_target(body)
+    job = local_exec.create_data_job("data_update", {}, target)
     return {"status": "queued", "job": job}
 
 
@@ -174,9 +183,8 @@ async def localworker_data_delete(body: Dict, _: bool = Depends(require_admin)):
     symbol = body.get("symbol")
     if not symbol:
         raise HTTPException(status_code=400, detail="symbol erforderlich")
-    if not local_exec.worker_online():
-        raise HTTPException(status_code=503, detail="Kein lokaler Worker verbunden")
-    job = local_exec.create_data_job("data_delete", {"symbol": symbol})
+    target = _data_target(body)
+    job = local_exec.create_data_job("data_delete", {"symbol": symbol}, target)
     return {"status": "queued", "job": job}
 
 
@@ -186,12 +194,11 @@ async def localworker_data_repair(body: Dict, _: bool = Depends(require_admin)):
     symbol = body.get("symbol")
     if not symbol:
         raise HTTPException(status_code=400, detail="symbol erforderlich")
-    if not local_exec.worker_online():
-        raise HTTPException(status_code=503, detail="Kein lokaler Worker verbunden")
+    target = _data_target(body)
     if not local_exec.worker_min_version(local_exec.DATA_REPAIR_MIN_VERSION):
         raise HTTPException(status_code=409,
                             detail="Lücken-Reparatur braucht Worker ≥ 1.17.0 – bitte das Worker-Paket neu herunterladen")
-    job = local_exec.create_data_job("data_repair", {"symbol": symbol})
+    job = local_exec.create_data_job("data_repair", {"symbol": symbol}, target)
     return {"status": "queued", "job": job}
 
 

@@ -595,3 +595,13 @@ Details: `docs/ZUSAMMENSPIEL_2026-11-17.md`.
 - **Archiv:** `candle_archive` schreibt `<symbol>.ckc`, liest alte `<symbol>.npy.gz` und übernimmt sie beim nächsten Sichern; `candle_cache` sichert nach Börsen-Downloads automatisch im Hintergrund (ab 1 Tag neuer Kerzen, 6-h-Drossel, nur mit genug freiem RAM).
 - **KI-Kosten:** `review_allocation.decide`: Stichprobe jede 3. Prüfung, wenn die KI ≤ 5 % eines Setups nimmt (≥ 10 Absagen).
 - **Kontrolle:** `/api/system/ram` zeigt `hourly_cache` und `candle_archive`.
+- **Archiv-Schutz (Nachtrag 18.11.):** Gesichert wird nur, wenn der Cache mindestens so weit zurückreicht wie das Archiv (`candle_cache._persist_source`, Stand je Symbol `_ARCHIVE_KNOWN`); Lesefehler werfen (`supabase_storage.download_checked`); kurze `.ckc` lesen die alte `.npy.gz` mit (`candle_archive.best_history`); Historien < 30 Tage werden nicht gesichert. Anlass: 14-Tage-Stände hatten 17 gerade übernommene lange Historien überschrieben (alte Dateien erhalten, Wiederherstellung automatisch).
+
+## Zwei Nutzer, zwei Worker, Worker 1.32.0 (18.11.2026, elftes Paket)
+
+- **Worker 1.32.0:** `parallel_sim.strategy_spec` schickt Strategie-Kopien als Definition mit (`variant`), `_strategy_from_spec` legt sie im Kind-Prozess an; `local_exec.uses_variant` + `VARIANT_MIN_VERSION` halten solche Aufträge von älteren Workern fern. Worker-Name = Rechnername (`default_worker_name`), Kerzen-Budget halber RAM, `parallel_sim.ram_capped_workers` begrenzt die Prozesse nach freiem RAM.
+- **Binance-Host:** `history_sources.binance_host/binance_ok` – zuletzt erfolgreicher Host zuerst (1m und 1h).
+- **Daten-Aufträge mit Ziel-Worker:** `create_data_job(..., target)`, `claim` vergibt sie nur an diesen Worker; Endpunkte nehmen `worker_id`.
+- **Mehrere Nutzer:** `services/job_ownership.py`; `/api/{optimizer,backtest}/active?mine=…` zeigt den eigenen Lauf (+ `others`), `/reset` mit `job_id` nur diesen, sonst nur hängende (`local_exec.job_is_stale`). Frontend: `lib/myJobs.js`.
+- **Worker-Panel:** Auswahl des angezeigten Workers, Daten-Aufträge an ihn, „Weiteren Worker verbinden“, unterscheidbare Namen (`workerLabel`).
+- **Optimizer:** „Empfohlene Einstellungen“ setzen alle Felder der Endlos-Suche (inkl. Zusatz-Filter aus, 24/7, keine Basis-Strategie).
