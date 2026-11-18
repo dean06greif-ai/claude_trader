@@ -77,6 +77,18 @@ async def download(bucket: str, path: str) -> Optional[bytes]:
             return None
 
 
+async def download_checked(bucket: str, path: str) -> Optional[bytes]:
+    """Wie download(), aber nur 400/404 gelten als „nicht vorhanden“ (None); jeder andere
+    Fehler wirft – Aufrufer, die danach überschreiben würden, brauchen den Unterschied."""
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=TIMEOUT_S)) as s:
+        async with s.get(f"{_base()}/object/{bucket}/{path}", headers=_headers()) as r:
+            if r.status == 200:
+                return await r.read()
+            if r.status in (400, 404):
+                return None
+            raise RuntimeError(f"Supabase {bucket}/{path}: HTTP {r.status}")
+
+
 async def list_objects(bucket: str, prefix: str = "", limit: int = 1000) -> List[Dict]:
     body = {"prefix": prefix, "limit": limit, "offset": 0,
             "sortBy": {"column": "name", "order": "desc"}}

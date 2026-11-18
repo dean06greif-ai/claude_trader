@@ -91,24 +91,45 @@ def upload_due(symbol: str, count: int, now: Optional[float] = None) -> bool:
     return count > int(last["count"]) and (now - float(last["at"])) >= UPLOAD_MIN_INTERVAL_S
 
 
+SHORT_SPAN_MS = 60 * 86400000      # neue Datei kürzer -> zusätzlich alte Datei prüfen
+MAX_JOIN_GAP_MS = 10 * 60000       # nur bis 10 min Abstand gelten als zusammenhängend
+
+
+def best_history(a: Optional[CandleArray], b: Optional[CandleArray]) -> Optional[CandleArray]:
+    """Beste LÜCKENLOSE Historie aus zwei Ständen (rein): zusammenhängend -> vereinigt,
+    sonst der Stand, der weiter zurückreicht (das Ende füllt der Cache von der Börse)."""
+    parts = [x for x in (a, b) if x is not None and len(x)]
+    if not parts:
+        return None
+    if len(parts) == 1:
+        return parts[0]
+    early, late = sorted(parts, key=lambda x: int(x.ts[0]))
+    if int(early.ts[-1]) >= int(late.ts[0]) - MAX_JOIN_GAP_MS:
+        return CandleArray.concat([early, late]).dedup_sorted()
+    return early
+
+
 async def download(symbol: str) -> Optional[CandleArray]:
+    """Archiv lesen. Wirft bei Speicher-Fehlern (nicht bei „nicht vorhanden“), damit
+    niemand nach einem Lesefehler eine längere Historie überschreibt."""
     if not enabled():
         return None
-    data = await storage.download(BUCKET, _path(symbol))
-    legacy = False
-    if not data:
-        # alte Datei (gzip-float64) übernehmen: lesen, beim nächsten Sichern als CKC1
-        data = await storage.download(BUCKET, _legacy_path(symbol))
-        legacy = bool(data)
-    if not data:
-        return None
-    ca = await asyncio.to_thread(decode, data)
+    data = await storage.download_checked(BUCKET, _path(symbol))
+    new = await asyncio.to_thread(decode, data) if data else None
+    old = None
+    if new is None or not len(new) or int(new.ts[-1]) - int(new.ts[0]) < SHORT_SPAN_MS:
+        # alte Datei (gzip-float64) lesen: Übernahme bzw. Wiederherstellung, falls die neue
+        # Datei nur einen kurzen Stand enthält (18.11.2026: Boot-Backfill hatte 14 Tage
+        # über übernommene lange Historien geschrieben – die alten Dateien sind erhalten)
+        legacy = await storage.download_checked(BUCKET, _legacy_path(symbol))
+        old = await asyncio.to_thread(decode, legacy) if legacy else None
+    ca = best_history(new, old)
     if ca is not None and len(ca):
         _LAST[symbol] = {"at": time.time(), "count": len(ca)}
-        if legacy:
+        if old is not None and len(old) and ca is not new:
             _MIGRATE.add(symbol)
         logger.info(f"candle_archive: {symbol} aus Supabase geladen ({len(ca)} Kerzen"
-                    f"{', altes Format' if legacy else ''})")
+                    f"{', mit altem Format' if old is not None and len(old) else ''})")
     return ca
 
 
@@ -150,6 +171,8 @@ async def _persist_now(symbol: str, get_candles):
         if not persist_due(symbol):
             return
         candles = get_candles()
+        if asyncio.iscoroutine(candles):
+            candles = await candles
         if candles is None or not len(candles):
             return
         # Kodieren braucht kurz ~4x die Rohgröße (48 Byte/Kerze): nur mit genug freiem RAM,

@@ -91,3 +91,31 @@ def test_non_binance_symbols_use_the_minute_cache(monkeypatch):
     monkeypatch.setattr(candle_cache, "get_candles", fake_get)
     got = asyncio.run(ch.get_hourly(None, "XAUTUSDT", 3))
     assert len(got) == 72 and np.array_equal(got.cl, aggregate_candles(ca1, "1h").cl)
+
+
+def test_hourly_upload_needs_known_archive(hourly_env, monkeypatch):
+    from services import candle_archive
+    full, _calls = hourly_env
+    uploads = []
+
+    class St:
+        async def download_checked(self, b, p):
+            raise RuntimeError("HTTP 500")
+
+        async def ensure_bucket(self, b):
+            return True
+
+        async def upload(self, b, p, data, ct=None):
+            uploads.append(p)
+            return True
+    monkeypatch.setattr(candle_archive, "enabled", lambda: True)
+    monkeypatch.setattr(candle_archive, "storage", St())
+    asyncio.run(ch._persist("BTCUSDT", full))
+    assert not uploads                                   # Archiv unlesbar: nicht überschreiben
+    St.download_checked = lambda self, b, p: _none()
+    asyncio.run(ch._persist("BTCUSDT", full))
+    assert uploads == ["h1/BTCUSDT.ckc"]
+
+
+async def _none():
+    return None

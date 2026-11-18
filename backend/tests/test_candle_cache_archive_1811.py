@@ -62,3 +62,33 @@ def test_long_request_extends_head_from_archive_and_fills_gap(env):
     assert len(big) == 2 and big[1] < 30 * 86400000
     asyncio.run(cc.get_candles(None, "BTCUSDT", 150))                # Archiv nicht erneut
     assert calls["archive"] == 1
+
+
+def test_persist_never_replaces_longer_archive(env, monkeypatch):
+    now, calls, arch = env                                  # Archiv endet vor 40 Tagen
+    asyncio.run(cc.get_candles(None, "BTCUSDT", 14))        # Boot-Backfill, Archiv ungelesen
+    assert "BTCUSDT" not in cc._ARCHIVE_KNOWN
+    assert asyncio.run(cc._persist_source("BTCUSDT")) is None          # Lücke: nicht sichern
+    assert cc._ARCHIVE_KNOWN["BTCUSDT"] == int(arch.ts[0])
+    assert asyncio.run(cc._persist_source("BTCUSDT")) is None          # auch später nicht
+
+
+def test_persist_joins_contiguous_archive(env, monkeypatch):
+    now, calls, _arch = env
+    near = _ca(now - 300 * 86400000, now - 13 * 86400000)   # schließt an den 14-Tage-Cache an
+
+    async def dl(sym):
+        return near
+    monkeypatch.setattr(candle_archive, "download", dl)
+    asyncio.run(cc.get_candles(None, "BTCUSDT", 14))
+    out = asyncio.run(cc._persist_source("BTCUSDT"))
+    assert out is not None and int(out.ts[0]) == int(near.ts[0]) and np.diff(out.ts).max() == M
+
+
+def test_persist_skips_when_archive_unreadable(env, monkeypatch):
+    async def broken(sym):
+        raise RuntimeError("HTTP 500")
+    monkeypatch.setattr(candle_archive, "download", broken)
+    asyncio.run(cc.get_candles(None, "BTCUSDT", 14))
+    assert asyncio.run(cc._persist_source("BTCUSDT")) is None
+    assert "BTCUSDT" not in cc._ARCHIVE_KNOWN

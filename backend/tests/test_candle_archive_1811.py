@@ -32,6 +32,11 @@ class FakeStorage:
     async def download(self, bucket, path):
         return self.files.get(path)
 
+    async def download_checked(self, bucket, path):
+        if getattr(self, "broken", False):
+            raise RuntimeError("HTTP 500")
+        return self.files.get(path)
+
     async def upload(self, bucket, path, data, content_type=None):
         self.files[path] = data
         return True
@@ -91,3 +96,38 @@ def test_saves_only_after_a_day_of_new_candles(monkeypatch):
     assert "ETHUSDT.ckc" in st.files and not ar.persist_due("ETHUSDT")
     ar.note_fetched("ETHUSDT", 5000)
     assert not ar.persist_due("ETHUSDT", now=ar._LAST["ETHUSDT"]["at"] + 60)   # Drossel 6 h
+
+
+def _gz(ca):
+    return ar._encode_gzip(ca.matrix())
+
+
+def test_short_new_file_does_not_hide_long_old_history(monkeypatch):
+    """18.11.2026: Boot-Backfill hatte 14 Tage über die übernommene lange Historie
+    geschrieben – die alte Datei ist erhalten und wird wieder genutzt."""
+    st = _setup(monkeypatch)
+    old = _ca(5000)                                                    # lange, ältere Historie
+    t0 = int(old.ts[-1]) + 40 * 86400000                               # 40 Tage Lücke
+    short = CandleArray(np.arange(t0, t0 + 1440 * 60000, 60000, dtype=np.int64),
+                        *(np.ones(1440),) * 5)
+    st.files["BTCUSDT.npy.gz"] = _gz(old)
+    st.files["BTCUSDT.ckc"] = ar.encode(short)
+    got = asyncio.run(ar.download("BTCUSDT"))
+    assert int(got.ts[0]) == int(old.ts[0]) and len(got) == len(old)  # lange Historie zurück
+    st.files["BTCUSDT.ckc"] = ar.encode(CandleArray.concat([old, short[:0]]))
+    assert len(asyncio.run(ar.download("BTCUSDT"))) == len(old)
+
+
+def test_overlapping_files_are_joined_and_errors_raise(monkeypatch):
+    st = _setup(monkeypatch)
+    ca = _ca(6000)
+    st.files["ETHUSDT.npy.gz"] = _gz(ca[:4000])
+    st.files["ETHUSDT.ckc"] = ar.encode(ca[3000:])
+    got = asyncio.run(ar.download("ETHUSDT"))
+    assert len(got) == 6000 and np.array_equal(got.ts, ca.ts)
+    st.broken = True
+    try:
+        asyncio.run(ar.download("ETHUSDT"))
+        raise AssertionError("Lesefehler muss werfen")
+    except RuntimeError:
+        pass

@@ -51,7 +51,9 @@ DISK_ENABLED = os.environ.get("CANDLE_CACHE_DISK", "1") != "0"
 TAIL_TTL_SEC = int(os.environ.get("CANDLE_CACHE_TAIL_TTL", "45"))
 # Archiv (Supabase) erst ab diesem Zeitraum nutzen; kürzer lädt die Börse schnell genug
 ARCHIVE_MIN_DAYS = int(os.environ.get("CANDLE_ARCHIVE_MIN_DAYS", "30"))
-_ARCHIVE_TRIED = set()          # Symbole, deren Archiv in diesem Prozess schon gelesen wurde
+# Archiv-Stand je Symbol in diesem Prozess: Start der archivierten Historie (ms) oder None
+# (kein Archiv). Fehlt der Eintrag, ist der Stand UNBEKANNT -> nie überschreiben.
+_ARCHIVE_KNOWN: Dict[str, Optional[int]] = {}
 
 _MEM: Dict[str, Dict] = {}  # symbol -> {"candles": CandleArray, "last_refresh", "used_at"}
 # LoopLock: der lokale Worker nutzt je Job einen eigenen Event-Loop (core/loop_lock)
@@ -270,8 +272,12 @@ async def get_candles(session, symbol: str, days: int, job: Dict = None,
                 # bei der Börse in Sekunden geladen; die ganze Archivdatei (Jahre) zu ziehen
                 # kostete Supabase-Transfer und RAM. Längere Anfragen holen das Archiv
                 # später über den Kopf-Pfad (_archive_head).
-                _ARCHIVE_TRIED.add(symbol)
-                disk = await candle_archive.download(symbol)
+                try:
+                    disk = await candle_archive.download(symbol)
+                    _ARCHIVE_KNOWN[symbol] = int(disk.ts[0]) if disk is not None and len(disk) else None
+                except Exception as e:  # noqa: BLE001 – Börse statt Archiv, Stand bleibt unbekannt
+                    logger.warning(f"candle_cache: Archiv {symbol} nicht lesbar: {e}")
+                    disk = None
                 if disk is not None and len(disk):
                     await asyncio.to_thread(_save_disk, symbol, disk)
             if disk is not None and len(disk):
@@ -321,8 +327,7 @@ async def get_candles(session, symbol: str, days: int, job: Dict = None,
                     f"(cache_span={round((cached_end - cached_start) / 86400000, 1)}d)")
         return cached.slice_from_ts(start)
 
-    if needs_head and symbol not in _ARCHIVE_TRIED and candle_archive.enabled():
-        _ARCHIVE_TRIED.add(symbol)
+    if needs_head and symbol not in _ARCHIVE_KNOWN and candle_archive.enabled():
         cached = await _archive_head(session, symbol, cached, job=job)
         cached_start = int(cached.ts[0]) if len(cached) else end
         needs_head = start < cached_start - 60000 and not _head_exhausted(symbol, now_ts)
@@ -379,8 +384,9 @@ async def _archive_head(session, symbol: str, cached: CandleArray, job: Dict = N
     try:
         arch = await candle_archive.download(symbol)
     except Exception as e:  # noqa: BLE001
-        logger.debug(f"candle_cache: Archiv-Kopf {symbol}: {e}")
+        logger.warning(f"candle_cache: Archiv-Kopf {symbol} nicht lesbar: {e}")
         return cached
+    _ARCHIVE_KNOWN[symbol] = int(arch.ts[0]) if arch is not None and len(arch) else None
     if arch is None or not len(arch) or not len(cached) or int(arch.ts[0]) >= int(cached.ts[0]):
         return cached
     older = arch[:int(np.searchsorted(arch.ts, cached.ts[0], side="left"))]
@@ -396,12 +402,46 @@ async def _archive_head(session, symbol: str, cached: CandleArray, job: Dict = N
     return CandleArray.concat(parts + [cached]).dedup_sorted()
 
 
+async def _persist_source(symbol: str) -> Optional[CandleArray]:
+    """Was ins Archiv darf (18.11.2026). Harte Regel: Das Archiv wird NIE durch eine
+    kürzere Historie ersetzt. Ist der Archiv-Stand unbekannt, wird er erst gelesen;
+    reicht das Archiv weiter zurück und schließt lückenlos an, wird es vorne angefügt,
+    sonst wird nicht gesichert (die alte, längere Historie bleibt)."""
+    entry = _MEM.get(symbol)
+    mem = entry["candles"] if entry else None
+    if mem is None or not len(mem):
+        return None
+    if symbol not in _ARCHIVE_KNOWN:
+        try:
+            arch = await candle_archive.download(symbol)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"candle_cache: Archiv {symbol} nicht lesbar – nicht überschreiben: {e}")
+            return None
+        _ARCHIVE_KNOWN[symbol] = int(arch.ts[0]) if arch is not None and len(arch) else None
+        if arch is not None and len(arch) and int(arch.ts[0]) < int(mem.ts[0]) - 60000 \
+                and int(arch.ts[-1]) >= int(mem.ts[0]) - candle_archive.MAX_JOIN_GAP_MS:
+            older = arch[:int(np.searchsorted(arch.ts, mem.ts[0], side="left"))]
+            async with _LOCK:
+                cur = _MEM.get(symbol)
+                if cur is not None and len(cur["candles"]) \
+                        and int(cur["candles"].ts[0]) == int(mem.ts[0]):
+                    cur["candles"] = CandleArray.concat([older, cur["candles"]])
+                    mem = cur["candles"]
+                    await _evict_if_needed_async(keep=symbol)
+    start = _ARCHIVE_KNOWN.get(symbol)
+    if start is not None and int(mem.ts[0]) > start + 60000:
+        logger.info(f"candle_cache: {symbol} – Archiv reicht weiter zurück als der Cache, "
+                    "nicht überschrieben")
+        return None
+    return mem
+
+
 def _persist_later(symbol: str, fetched: int) -> None:
     """18.11.2026: Von der Börse Geladenes im Hintergrund ins Archiv sichern, damit
     es einen Deploy überlebt (vorher nur beim Setup-Backtest)."""
     try:
         candle_archive.note_fetched(symbol, fetched)
-        candle_archive.schedule_persist(symbol, lambda: (_MEM.get(symbol) or {}).get("candles"))
+        candle_archive.schedule_persist(symbol, lambda: _persist_source(symbol))
     except Exception as e:  # noqa: BLE001
         logger.debug(f"candle_cache: Archiv-Sicherung {symbol}: {e}")
 
@@ -516,7 +556,7 @@ def stats() -> Dict:
 
 def clear():
     _MEM.clear()
-    _ARCHIVE_TRIED.clear()
+    _ARCHIVE_KNOWN.clear()
 
 
 DOWNLOAD_STATS = {"candles": 0, "seconds": 0.0}

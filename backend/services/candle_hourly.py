@@ -40,6 +40,7 @@ _MEM: Dict[str, Dict] = {}              # symbol -> {"candles", "last_refresh", 
 _LOCK = LoopLock()
 _HEAD_DONE: Dict[str, float] = {}       # symbol -> Zeitpunkt: Quelle hat davor nichts mehr
 _ARCHIVED: Dict[str, int] = {}          # symbol -> Anzahl Stunden im Archiv (bekannt)
+_ARCH_START: Dict[str, Optional[int]] = {}   # symbol -> Archiv-Start (None = keins); fehlt = unbekannt
 STATS = {"requests": 0, "candles": 0, "seconds": 0.0, "disk_hits": 0, "archive_hits": 0,
          "archive_uploads": 0, "fallback_1m": 0}
 
@@ -120,19 +121,18 @@ async def _archive_download(symbol: str) -> Optional[CandleArray]:
     if not candle_archive.enabled():
         return None
     try:
-        data = await candle_archive.storage.download(candle_archive.BUCKET,
-                                                     f"{ARCHIVE_PREFIX}{symbol}.ckc")
-        if not data:
-            return None
-        ca = await asyncio.to_thread(candle_archive.decode, data)
-        if ca is None or not len(ca):
-            return None
-        _ARCHIVED[symbol] = len(ca)
-        STATS["archive_hits"] += 1
-        return ca
-    except Exception as e:  # noqa: BLE001
+        data = await candle_archive.storage.download_checked(candle_archive.BUCKET,
+                                                             f"{ARCHIVE_PREFIX}{symbol}.ckc")
+    except Exception as e:  # noqa: BLE001 – Stand unbekannt: später nicht überschreiben
         logger.warning(f"candle_hourly: Archiv laden {symbol}: {e}")
         return None
+    ca = await asyncio.to_thread(candle_archive.decode, data) if data else None
+    _ARCH_START[symbol] = int(ca.ts[0]) if ca is not None and len(ca) else None
+    if ca is None or not len(ca):
+        return None
+    _ARCHIVED[symbol] = len(ca)
+    STATS["archive_hits"] += 1
+    return ca
 
 
 async def _persist(symbol: str, ca: CandleArray):
@@ -144,6 +144,13 @@ async def _persist(symbol: str, ca: CandleArray):
     from services import candle_archive
     if not candle_archive.enabled():
         return
+    if symbol not in _ARCH_START:
+        await _archive_download(symbol)            # Stand erst lesen, nie blind überschreiben
+        if symbol not in _ARCH_START:
+            return
+    start = _ARCH_START.get(symbol)
+    if start is not None and int(closed.ts[0]) > start + HOUR:
+        return                                      # Archiv reicht weiter zurück
     known = _ARCHIVED.get(symbol)
     if known is not None and len(closed) - known < ARCHIVE_MIN_GROWTH:
         return
@@ -303,3 +310,4 @@ def clear():
     _MEM.clear()
     _HEAD_DONE.clear()
     _ARCHIVED.clear()
+    _ARCH_START.clear()
