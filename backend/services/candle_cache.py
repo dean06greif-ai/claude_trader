@@ -49,6 +49,9 @@ MAX_CANDLES_IN_MEMORY = (int(os.environ.get("CANDLE_CACHE_MAX_CANDLES", "0") or 
                          or _default_max_candles())
 DISK_ENABLED = os.environ.get("CANDLE_CACHE_DISK", "1") != "0"
 TAIL_TTL_SEC = int(os.environ.get("CANDLE_CACHE_TAIL_TTL", "45"))
+# Archiv (Supabase) erst ab diesem Zeitraum nutzen; kürzer lädt die Börse schnell genug
+ARCHIVE_MIN_DAYS = int(os.environ.get("CANDLE_ARCHIVE_MIN_DAYS", "30"))
+_ARCHIVE_TRIED = set()          # Symbole, deren Archiv in diesem Prozess schon gelesen wurde
 
 _MEM: Dict[str, Dict] = {}  # symbol -> {"candles": CandleArray, "last_refresh", "used_at"}
 # LoopLock: der lokale Worker nutzt je Job einen eigenen Event-Loop (core/loop_lock)
@@ -261,8 +264,13 @@ async def get_candles(session, symbol: str, days: int, job: Dict = None,
         entry = _MEM.get(symbol)
         if entry is None:
             disk = await asyncio.to_thread(_load_disk, symbol)
-            if disk is None or not len(disk):
-                # Render-Disk ist flüchtig: dauerhaftes Archiv (Supabase) als Rückfall
+            if (disk is None or not len(disk)) and days > ARCHIVE_MIN_DAYS:
+                # Render-Disk ist flüchtig: dauerhaftes Archiv (Supabase) als Rückfall.
+                # 18.11.2026: nur für lange Zeiträume – kurze (Boot-Backfill: 14 Tage) sind
+                # bei der Börse in Sekunden geladen; die ganze Archivdatei (Jahre) zu ziehen
+                # kostete Supabase-Transfer und RAM. Längere Anfragen holen das Archiv
+                # später über den Kopf-Pfad (_archive_head).
+                _ARCHIVE_TRIED.add(symbol)
                 disk = await candle_archive.download(symbol)
                 if disk is not None and len(disk):
                     await asyncio.to_thread(_save_disk, symbol, disk)
@@ -313,6 +321,12 @@ async def get_candles(session, symbol: str, days: int, job: Dict = None,
                     f"(cache_span={round((cached_end - cached_start) / 86400000, 1)}d)")
         return cached.slice_from_ts(start)
 
+    if needs_head and symbol not in _ARCHIVE_TRIED and candle_archive.enabled():
+        _ARCHIVE_TRIED.add(symbol)
+        cached = await _archive_head(session, symbol, cached, job=job)
+        cached_start = int(cached.ts[0]) if len(cached) else end
+        needs_head = start < cached_start - 60000 and not _head_exhausted(symbol, now_ts)
+
     if needs_head:
         head = await _fetch_range_parallel(session, symbol, start, cached_start, job=job)
         if len(head):
@@ -356,6 +370,30 @@ async def get_candles(session, symbol: str, days: int, job: Dict = None,
         await _evict_if_needed_async(keep=symbol)
     _persist_later(symbol, 0)
     return cached.slice_from_ts(start)
+
+
+async def _archive_head(session, symbol: str, cached: CandleArray, job: Dict = None) -> CandleArray:
+    """Ältere Historie aus dem Archiv vor den Cache hängen (18.11.2026). Eine Lücke
+    zwischen Archiv-Ende und Cache-Anfang wird von der Börse gefüllt – nie stillschweigend
+    offen gelassen. Fehler: Cache unverändert (Kopf kommt dann wie bisher von der Börse)."""
+    try:
+        arch = await candle_archive.download(symbol)
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"candle_cache: Archiv-Kopf {symbol}: {e}")
+        return cached
+    if arch is None or not len(arch) or not len(cached) or int(arch.ts[0]) >= int(cached.ts[0]):
+        return cached
+    older = arch[:int(np.searchsorted(arch.ts, cached.ts[0], side="left"))]
+    if not len(older):
+        return cached
+    parts = [older]
+    gap_start, gap_end = int(older.ts[-1]) + 60000, int(cached.ts[0])
+    if gap_end - gap_start > 60000:
+        gap = await _fetch_range(session, symbol, gap_start, gap_end, job=job)
+        if len(gap):
+            parts.append(gap[:int(np.searchsorted(gap.ts, cached.ts[0], side="left"))])
+    logger.info(f"candle_cache ARCHIV-KOPF {symbol} +{len(older)}")
+    return CandleArray.concat(parts + [cached]).dedup_sorted()
 
 
 def _persist_later(symbol: str, fetched: int) -> None:
@@ -478,6 +516,7 @@ def stats() -> Dict:
 
 def clear():
     _MEM.clear()
+    _ARCHIVE_TRIED.clear()
 
 
 DOWNLOAD_STATS = {"candles": 0, "seconds": 0.0}

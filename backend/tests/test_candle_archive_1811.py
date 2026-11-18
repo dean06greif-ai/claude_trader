@@ -41,9 +41,14 @@ class FakeStorage:
 
 
 def _setup(monkeypatch):
+    from services import ram_queue
     st = FakeStorage()
     monkeypatch.setattr(ar, "storage", st)
     monkeypatch.setattr(ar, "enabled", lambda: True)
+
+    async def ram_ok(*_a, **_k):
+        return True
+    monkeypatch.setattr(ram_queue, "wait_for_ram", ram_ok)
     for d in (ar._LAST, ar._DIRTY):
         d.clear()
     ar._MIGRATE.clear()
