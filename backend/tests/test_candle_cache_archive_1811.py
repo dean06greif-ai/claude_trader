@@ -92,3 +92,12 @@ def test_persist_skips_when_archive_unreadable(env, monkeypatch):
     asyncio.run(cc.get_candles(None, "BTCUSDT", 14))
     assert asyncio.run(cc._persist_source("BTCUSDT")) is None
     assert "BTCUSDT" not in cc._ARCHIVE_KNOWN
+
+
+def test_short_histories_are_not_scheduled(env, monkeypatch):
+    scheduled = []
+    monkeypatch.setattr(candle_archive, "schedule_persist", lambda sym, fn: scheduled.append(sym))
+    asyncio.run(cc.get_candles(None, "BTCUSDT", 14))
+    assert scheduled == []
+    asyncio.run(cc.get_candles(None, "BTCUSDT", 100))      # lang (Archiv-Kopf + Lücke)
+    assert scheduled == ["BTCUSDT"]

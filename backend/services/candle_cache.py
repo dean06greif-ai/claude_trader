@@ -441,6 +441,14 @@ def _persist_later(symbol: str, fetched: int) -> None:
     es einen Deploy überlebt (vorher nur beim Setup-Backtest)."""
     try:
         candle_archive.note_fetched(symbol, fetched)
+        entry = _MEM.get(symbol)
+        mem = entry["candles"] if entry else None
+        # Kurze Historien (Boot-Backfill: 14 Tage) nicht sichern – sie sind bei der Börse in
+        # Sekunden geladen; sonst müsste nach jedem Deploy für jedes Symbol erst das Archiv
+        # gelesen werden (Supabase-Transfer).
+        if mem is None or not len(mem) or \
+                int(mem.ts[-1]) - int(mem.ts[0]) < ARCHIVE_MIN_DAYS * 86400000:
+            return
         candle_archive.schedule_persist(symbol, lambda: _persist_source(symbol))
     except Exception as e:  # noqa: BLE001
         logger.debug(f"candle_cache: Archiv-Sicherung {symbol}: {e}")
