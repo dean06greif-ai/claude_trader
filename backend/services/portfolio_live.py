@@ -45,6 +45,8 @@ CONFIRM_LIVE = "LIVE"
 CONFIRM_FLATTEN = "ALLES SCHLIESSEN"
 
 _lock = asyncio.Lock()
+# Prozessübergreifend (Render-Deploy-Überlappung): Börsen-Schritte nur in EINEM Prozess
+LEASE_ID = "portfolio_live_lease"
 _inflight: Set[Tuple[str, str]] = set()          # (Bitunix-Symbol, Seite) während einer Order
 _owned_pids: Set[str] = set()                     # offene Portfolio-Positionen an der Börse
 _owned_sides: Set[Tuple[str, str]] = set()        # (internes Symbol, Seite)
@@ -617,7 +619,10 @@ async def sync(db, force: bool = False) -> Dict:
         return {"status": "wartet", "detail": "Portfolio noch nicht gerechnet"}
     if _lock.locked():
         return {"status": "läuft bereits"}
-    async with _lock:
+    from services import process_lease
+    async with _lock, process_lease.hold(db, LEASE_ID) as held:
+        if not held:
+            return {"status": "läuft bereits", "detail": "anderer Prozess (Deploy-Überlappung)"}
         exch, prices, meta, avail = await _exchange_view(client)
         live = cfg["mode"] == "live"
         closed_now = await reconcile(db, client, exch, pf.get("positions") or []) if live else []
@@ -693,9 +698,11 @@ async def health(db) -> Dict:
     client = _client()
     if client is None or not client.configured() or _lock.locked():
         return {"status": "übersprungen"}
-    from services import portfolio_engine
+    from services import portfolio_engine, process_lease
     from services.position_watchdog import parse_positions
-    async with _lock:
+    async with _lock, process_lease.hold(db, LEASE_ID) as held:
+        if not held:
+            return {"status": "übersprungen", "detail": "anderer Prozess (Deploy-Überlappung)"}
         pf = (await portfolio_engine.get_state(db)).get("state") or {}
         exch = parse_positions(await client.get_positions())
         closed = await reconcile(db, client, exch, pf.get("positions") or [])

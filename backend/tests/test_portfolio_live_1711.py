@@ -401,3 +401,31 @@ def test_doctor_live_findings():
     f = sd.judge_portfolio_live({"mode": "live", "halted": True, "halt_reason": "Verlust", "last_check_at": 100},
                                 {"errors": 2}, 100 + 4 * 3600)
     assert [x["id"] for x in f] == ["portfolio_live_halt", "portfolio_live_errors", "portfolio_live_stale"]
+
+
+def test_lease_only_one_process_at_a_time():
+    from services import process_lease as pls
+    db = FakeDB()
+    assert run(pls.acquire(db, "x", ttl_s=60, owner="a", now=1000))
+    assert not run(pls.acquire(db, "x", ttl_s=60, owner="b", now=1010))   # fremde gültige Sperre
+    assert run(pls.acquire(db, "x", ttl_s=60, owner="a", now=1020))       # eigene verlängern
+    assert run(pls.acquire(db, "x", ttl_s=60, owner="b", now=1081))       # abgelaufen -> übernehmen
+    run(pls.release(db, "x", owner="a"))                                   # fremde Freigabe wirkt nicht
+    assert not run(pls.acquire(db, "x", ttl_s=60, owner="a", now=1090))
+    run(pls.release(db, "x", owner="b"))
+    assert run(pls.acquire(db, "x", ttl_s=60, owner="a", now=1091))
+
+
+def test_second_process_does_not_trade_during_deploy_overlap(env):
+    from services import process_lease as pls
+    db, client, sent, pf_state = env
+    run(pl.set_config(db, {"mode": "live", "confirm": "LIVE", "capital": 100}))
+    run(pf_state(pf(tp("BTCUSDT", "SHORT", 70000.0, 75600.0))))
+    assert run(pls.acquire(db, pl.LEASE_ID, owner="alter-prozess"))       # alter Render-Prozess läuft
+    res = run(pl.sync(db))
+    assert res["status"] == "läuft bereits" and not client.calls
+    assert run(pl.health(db))["status"] == "übersprungen" and not client.calls
+    run(pls.release(db, pl.LEASE_ID, owner="alter-prozess"))
+    res = run(pl.sync(db))
+    assert res["open"] == 1 and [c[0] for c in client.calls] == ["lev", "order", "sl"]
+    assert run(pls.acquire(db, pl.LEASE_ID, owner="alter-prozess"))       # nach dem Lauf wieder frei
