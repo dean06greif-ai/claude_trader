@@ -679,6 +679,9 @@ class AIEngine(AIEngineContextMixin, AIEngineGovernanceMixin,
         self.decisions: Dict[str, Dict] = {}
         self.last_run: Optional[str] = None
         self.next_run: Optional[str] = None
+        # 18.11.2026: Herzschlag der Hauptschleife (jede Runde, alle ~5 s). Im Prüfer-Modus
+        # entfällt der Analyse-Zyklus, `last_run` bleibt dann lange stehen – das ist kein Fehler.
+        self.loop_beat: Optional[str] = None
         self.active_window: Optional[str] = None
         self._day_risk_cache: Dict = {}
         self.last_error: Optional[str] = None
@@ -3090,6 +3093,7 @@ class AIEngine(AIEngineContextMixin, AIEngineGovernanceMixin,
         logger.info("AI Trader engine loop started (multi-provider: gemini/groq/openrouter/mistral)")
         while self.running:
             await asyncio.sleep(5)
+            self.loop_beat = datetime.now(timezone.utc).isoformat()
             try:
                 # Housekeeping läuft IMMER (auch wenn Engine aus ist / kein Key), damit
                 # stündliches Analyse-Cleanup und der 00:00-Berlin-Reset zuverlässig feuern.
@@ -3389,6 +3393,7 @@ class AIEngine(AIEngineContextMixin, AIEngineGovernanceMixin,
             "backup_keys": ai_providers.backup_keys_info(),
             "analyzing": self._analyzing,
             "last_run": self.last_run,
+            "loop_beat": self.loop_beat,
             "next_run": self.next_run,
             "last_error": self.last_error,
             "decisions": self.decisions,

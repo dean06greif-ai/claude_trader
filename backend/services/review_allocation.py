@@ -38,13 +38,23 @@ def decide(setup_bal: Optional[Dict], counter: int, explore_every: int = EXPLORE
         return True, "noch keine Veto-Bilanz – Prüfung misst den Wert"
     take = setup_bal.get("taken") or {}
     rej = setup_bal.get("rejected") or {}
-    if int(take.get("n") or 0) < MIN_EACH or int(rej.get("n") or 0) < MIN_EACH \
+    take_n, rej_n = int(take.get("n") or 0), int(rej.get("n") or 0)
+    every = max(1, int(explore_every or EXPLORE_EVERY))
+    # 18.11.2026: Nimmt die KI ein Setup (fast) nie, misst jede weitere Prüfung nur
+    # dasselbe „nein“ – vorher wurde trotzdem JEDES Signal geprüft (taken < MIN_EACH).
+    # Jetzt Stichprobe; nimmt die KI wieder Signale, gilt automatisch die Regel unten.
+    if take_n < MIN_EACH and rej_n >= MIN_EACH and take_n * 20 <= rej_n:      # <= ~5 % genommen
+        if counter % every == 0:
+            return True, (f"Stichprobe (jede {every}. Prüfung) – KI nahm {take_n} von "
+                          f"{take_n + rej_n} Signalen")
+        return False, (f"KI nimmt dieses Setup fast nie ({take_n} von {take_n + rej_n}) – "
+                       "nur Regel-Paper, KI-Aufruf gespart")
+    if take_n < MIN_EACH or rej_n < MIN_EACH \
             or take.get("avg_r") is None or rej.get("avg_r") is None:
         return True, "Veto-Wert wird noch gemessen"
     sel = float(take["avg_r"]) - float(rej["avg_r"])
     if sel > EDGE_MIN_R:
         return True, f"KI-Auswahl besser als ihre Absagen ({sel:+.2f} R)"
-    every = max(1, int(explore_every or EXPLORE_EVERY))
     if counter % every == 0:
         return True, f"Stichprobe (jede {every}. Prüfung) – Auswahl-Wert {sel:+.2f} R wird weiter gemessen"
     return False, (f"KI-Auswahl ohne Mehrwert ({sel:+.2f} R: genommen {take['avg_r']:+.2f} R, "

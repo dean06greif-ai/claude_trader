@@ -585,3 +585,13 @@ Details: `docs/ZUSAMMENSPIEL_2026-11-17.md`.
 
 - **Statistik springt nicht mehr:** Die Analyse-Ansicht merkt sich je Filter und Coin den letzten Server-Stand. Ein Fehlversuch oder ein Filterwechsel fällt nicht mehr auf die Teil-Summe der geladenen Trades zurück; beim ersten Laden steht „…“. Nur wenn der Server nicht antwortet, wird über die geladenen Trades gezählt, mit sichtbarem Hinweis. Backend: 10-s-Cache der Trade-Zeilen (`trade_summary.RowCache`).
 - **Bewertungs-Stichtag 17.11. 23:15** (Auftrag des Traders): einmalige Boot-Migration `migrate_evaluation_cutoff_1711`. Verschiebt nur nach vorn, nie zurück; danach gilt, was im Leitstand eingestellt wird.
+
+## Fehlalarm Schleife, Event-Loop, Datenstufe 1h, Archiv, KI-Stichprobe (18.11.2026, zehntes Paket)
+
+- **Fehlalarm behoben:** `ai_engine.loop_beat` (Herzschlag jeder Runde); `system_doctor.judge_loop` meldet „hängt“ nur ohne Herzschlag > 20 min und prüft `last_run` nicht mehr im Prüfer-Modus. Anzeige ohne „Nächste Marktanalyse“ im Prüfer-Modus.
+- **Event-Loop:** `setup_trigger.scan_symbol` baut Merkmale nur bei neuer geschlossener 5m-Kerze (`last_closed_5m`, gleiche Regel wie die volle Aggregation); `scan` rechnet im Thread.
+- **Datenstufe 1h:** `services/candle_hourly.py` (RAM → Platte `h1/` → Supabase `h1/<symbol>.ckc` → Binance `interval=1h`). `backtester.fetch_history(base=…)`, `history_base`, `enough_history`; Backtester/Optimizer/Forschung laden ab 1h-Timeframe Stundenkerzen. Abschaltbar mit `hourly_base: false`.
+- **Kompaktes Format:** `services/candle_codec.py` (CKC1: Zeit-Abstände, Dezimal-Ganzzahlen, OHLC-Differenzen, Byte-Shuffle + zlib; bitgenau verlustfrei, sonst Rohspalten bzw. gzip, was kleiner ist).
+- **Archiv:** `candle_archive` schreibt `<symbol>.ckc`, liest alte `<symbol>.npy.gz` und übernimmt sie beim nächsten Sichern; `candle_cache` sichert nach Börsen-Downloads automatisch im Hintergrund (ab 1 Tag neuer Kerzen, 6-h-Drossel, nur mit genug freiem RAM).
+- **KI-Kosten:** `review_allocation.decide`: Stichprobe jede 3. Prüfung, wenn die KI ≤ 5 % eines Setups nimmt (≥ 10 Absagen).
+- **Kontrolle:** `/api/system/ram` zeigt `hourly_cache` und `candle_archive`.

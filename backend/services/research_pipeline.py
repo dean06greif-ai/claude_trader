@@ -230,9 +230,9 @@ async def forward_eval(c: Dict, settings: Dict, now: Optional[datetime] = None) 
     nur lesend). Rückgabe progress-Dict (trades, avg_r, t, lb, ub, per_symbol)."""
     import aiohttp
     from services import optimizer as opt
-    from services.backtester import fetch_history, simulate_pair
+    from services.backtester import BASE_MS, fetch_history, history_base, simulate_pair
     from services.bitunix_trade import DEFAULT_COIN_CFG
-    from services.timeframes import aggregate_candles
+    from services.timeframes import TIMEFRAMES, aggregate_candles
     now = now or datetime.now(timezone.utc)
     found = _parse(c.get("found_at")) or now
     tf = c.get("timeframe") or "15m"
@@ -244,8 +244,9 @@ async def forward_eval(c: Dict, settings: Dict, now: Optional[datetime] = None) 
     r_n, r_sum, r_sq, per = 0, 0.0, 0.0, {}
     async with aiohttp.ClientSession() as session:
         for sym in c.get("symbols") or []:
-            raw = await fetch_history(session, sym, days)
-            candles = aggregate_candles(raw, tf)
+            _base = history_base([TIMEFRAMES.get(tf, 1)])
+            raw = await fetch_history(session, sym, days, base=_base)
+            candles = aggregate_candles(raw, tf, base_ms=BASE_MS[_base])
             del raw
             if len(candles) < 50:
                 continue

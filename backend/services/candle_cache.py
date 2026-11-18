@@ -297,6 +297,7 @@ async def get_candles(session, symbol: str, days: int, job: Dict = None,
             _MEM[symbol] = {"candles": candles, "last_refresh": time.time(),
                             "used_at": time.time()}
             await _evict_if_needed_async(keep=symbol)
+        _persist_later(symbol, len(candles))
         return candles.slice_from_ts(start)
 
     cached: CandleArray = entry["candles"]
@@ -327,6 +328,7 @@ async def get_candles(session, symbol: str, days: int, job: Dict = None,
                 head = CandleArray.concat([extra, head]) if len(head) else extra
         if len(head):
             cached = CandleArray.concat([head, cached])
+            candle_archive.note_fetched(symbol, len(head))
             logger.info(f"candle_cache EXTEND-HEAD {symbol} +{len(head)}")
         else:
             # Weder Primär- noch Backup-Quelle haben vor dem Cache-Anfang etwas:
@@ -344,6 +346,7 @@ async def get_candles(session, symbol: str, days: int, job: Dict = None,
                       if len(cached) else start)
         tail = await _fetch_range(session, symbol, tail_start, end, job=job)
         cached = _merge_tail(cached, tail)
+        candle_archive.note_fetched(symbol, max(len(tail) - 3, 0))
         logger.info(f"candle_cache EXTEND-TAIL {symbol} +{len(tail)}")
 
     async with _LOCK:
@@ -351,7 +354,18 @@ async def get_candles(session, symbol: str, days: int, job: Dict = None,
         entry["last_refresh"] = now_ts
         entry["used_at"] = now_ts
         await _evict_if_needed_async(keep=symbol)
+    _persist_later(symbol, 0)
     return cached.slice_from_ts(start)
+
+
+def _persist_later(symbol: str, fetched: int) -> None:
+    """18.11.2026: Von der Börse Geladenes im Hintergrund ins Archiv sichern, damit
+    es einen Deploy überlebt (vorher nur beim Setup-Backtest)."""
+    try:
+        candle_archive.note_fetched(symbol, fetched)
+        candle_archive.schedule_persist(symbol, lambda: (_MEM.get(symbol) or {}).get("candles"))
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"candle_cache: Archiv-Sicherung {symbol}: {e}")
 
 
 async def _fetch_secondary_range(session, symbol: str, a: int, b: int, cached: CandleArray,

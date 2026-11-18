@@ -21,7 +21,8 @@ from typing import Dict, List
 
 import aiohttp
 
-from services.backtester import JobCancelled, _clip_history, fetch_history, simulate_pair
+from services.backtester import (BASE_MS, JobCancelled, _clip_history, fetch_history,
+                                 history_base, simulate_pair)
 from services.timeframes import TIMEFRAMES, aggregate_candles, rule_tf_options
 from services import fast_sim
 from services import job_control
@@ -1534,15 +1535,17 @@ async def run_optimizer(job_id: str, body: Dict, registry, settings: Dict,
         back_days = backward_days(body, mode, days)
         back_hist: Dict[str, List[Dict]] = {}
         _cut_ms = int(time.time() * 1000) - int(days) * 86400000
+        # 18.11.2026: ab 1h-Timeframe Stundenkerzen direkt laden (60x weniger Daten)
+        _base = history_base([TIMEFRAMES.get(tf, 1)], body)
         async with aiohttp.ClientSession() as session:
             for idx, sym in enumerate(symbols):
                 if cancelled():
                     raise JobCancelled()
                 job["phase"] = f"Lade Daten: {sym}"
                 job["progress"] = round(idx / max(len(symbols), 1) * 10)
-                raw = await fetch_history(session, sym, days + back_days, job=job)
+                raw = await fetch_history(session, sym, days + back_days, job=job, base=_base)
                 raw_candles += len(raw)
-                candles = aggregate_candles(raw, tf)
+                candles = aggregate_candles(raw, tf, base_ms=BASE_MS[_base])
                 del raw
                 gc.collect()
                 if back_days:
@@ -1865,7 +1868,7 @@ async def run_optimizer(job_id: str, body: Dict, registry, settings: Dict,
              "evaluations": b.get("evaluations", 0),
              "dyn_segments": b.get("dyn_segments", 0),
              "sim_candles": sum(len(c) for c in histories.values()),
-             "raw_candles": raw_candles},
+             "raw_candles": raw_candles, "base": _base},
             t_start, dl_before, _cc.download_stats(), job.get("execution") or "cloud")
 
         job["result"] = result

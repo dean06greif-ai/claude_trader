@@ -63,14 +63,51 @@ def _clip_history(history, start_ms, end_ms):
             and (not end_ms or c["timestamp"] <= end_ms)]
 
 
+BASE_MS = {"1m": 60_000, "1h": 3_600_000}
+
+
 async def fetch_history(session: aiohttp.ClientSession, symbol: str, days: int,
-                        job: Dict = None, start_ms: Optional[int] = None) -> List[Dict]:
-    """Lädt 1m-Kerzen (nutzt Hybrid-Cache; siehe services.candle_cache)."""
+                        job: Dict = None, start_ms: Optional[int] = None,
+                        base: str = "1m") -> List[Dict]:
+    """Lädt 1m-Kerzen (nutzt Hybrid-Cache; siehe services.candle_cache).
+    base="1h" (18.11.2026): Stundenkerzen direkt (services.candle_hourly) – für
+    Läufe, deren kleinster Timeframe >= 1h ist; 60x weniger Daten, gleiche Kerzen."""
     from core.instruments import canonical
+    if base == "1h":
+        from services import candle_hourly
+        return await candle_hourly.get_hourly(session, canonical(symbol), days, job=job,
+                                              start_ms=start_ms)
     from services import candle_cache
     # Fremde Schreibweisen (GOLDUSDT) teilen sich Cache und Quelle mit dem App-Symbol
     return await candle_cache.get_candles(session, canonical(symbol), days, job=job,
                                           start_ms=start_ms)
+
+
+def history_base(tf_minutes: List[int], cfg: Optional[Dict] = None) -> str:
+    """Basis-Auflösung der Historie (rein): Stundenkerzen, wenn ALLE Timeframes
+    >= 1h sind (abschaltbar mit cfg["hourly_base"] = False)."""
+    if cfg is not None and cfg.get("hourly_base") is False:
+        return "1m"
+    return "1h" if tf_minutes and min(tf_minutes) >= 60 else "1m"
+
+
+def enough_history(history, base: str = "1m") -> bool:
+    """Gleiche Mindestmenge wie bisher (> 100 Minuten-Kerzen), unabhängig von der Basis."""
+    return len(history) * (BASE_MS.get(base, 60_000) // 60_000) > 100
+
+
+def _static_base(strategy_ids, registry, strategy_configs, settings, default_timeframe,
+                 cfg: Optional[Dict] = None) -> str:
+    mins = []
+    for sid in strategy_ids:
+        strat = registry.get(sid)
+        if not strat:
+            continue
+        scfg = strategy_configs.get(sid) or {}
+        strat = _effective_strategy(strat, sid, scfg)
+        tf = resolve_timeframe(strat, sid, scfg, settings, default_timeframe)
+        mins.append(TIMEFRAMES.get(tf, 1))
+    return history_base(mins, cfg)
 
 
 # ---------------- Zeitfenster ----------------
@@ -826,20 +863,23 @@ async def _simulate_all_sequential(job, strategy_ids, symbols, days, cfg, regist
     bench = {"data_seconds": 0.0, "sim_seconds": 0.0, "cpu_seconds": 0.0,
              "workers": 1, "pairs": 0, "sim_candles": 0, "raw_candles": 0}
 
+    base = _static_base(strategy_ids, registry, strategy_configs, settings, default_timeframe, cfg)
+    base_ms = BASE_MS[base]
+    bench["base"] = base
     async with aiohttp.ClientSession() as session:
         for sym in symbols:
             if cancelled():
                 raise JobCancelled()
             job["phase"] = f"Lade Daten: {sym}"
             _t = time.perf_counter()
-            history = await fetch_history(session, sym, days, job=job)
+            history = await fetch_history(session, sym, days, job=job, base=base)
             bench["data_seconds"] += time.perf_counter() - _t
             bench["raw_candles"] += len(history)
             if start_ms or end_ms:
                 history = _clip_history(history, start_ms, end_ms)
             done_units += 1
             job["progress"] = round(done_units / total_units * 100)
-            if len(history) <= 100:
+            if not enough_history(history, base):
                 done_units += len(strategy_ids)
                 job["progress"] = round(done_units / total_units * 100)
                 continue
@@ -859,7 +899,7 @@ async def _simulate_all_sequential(job, strategy_ids, symbols, days, cfg, regist
                 tf = resolve_timeframe(strat, sid, scfg, settings, default_timeframe)
                 strat_tf[sid] = tf
                 if tf not in tf_cache:
-                    tf_cache[tf] = aggregate_candles(history, tf)
+                    tf_cache[tf] = aggregate_candles(history, tf, base_ms=base_ms)
                 candles = tf_cache[tf]
                 pair_cfg = _pair_trade_cfg(cfg, scfg)
                 eff_settings = _pair_settings(settings, sid, scfg)
@@ -936,17 +976,20 @@ async def _simulate_all_parallel(job, strategy_ids, symbols, days, cfg, registry
 
     # Phase 1: Daten laden (netzwerk-gebunden, wie bisher sequenziell + Cache)
     all_hist: Dict[str, List[Dict]] = {}
+    base = _static_base(strategy_ids, registry, strategy_configs, settings, default_timeframe, cfg)
+    base_ms = BASE_MS[base]
+    bench["base"] = base
     _t = time.perf_counter()
     async with aiohttp.ClientSession() as session:
         for i, sym in enumerate(symbols):
             if cancelled():
                 raise JobCancelled()
             job["phase"] = f"Lade Daten: {sym}"
-            history = await fetch_history(session, sym, days, job=job)
+            history = await fetch_history(session, sym, days, job=job, base=base)
             bench["raw_candles"] += len(history)
             if start_ms or end_ms:
                 history = _clip_history(history, start_ms, end_ms)
-            if len(history) > 100:
+            if enough_history(history, base):
                 all_hist[sym] = history
             job["progress"] = round((i + 1) / max(len(symbols), 1) * 25)
     bench["data_seconds"] = time.perf_counter() - _t
@@ -967,7 +1010,7 @@ async def _simulate_all_parallel(job, strategy_ids, symbols, days, cfg, registry
             strat_tf[sid] = tf
             key = f"{sym}|{tf}"
             if key not in agg:
-                agg[key] = aggregate_candles(all_hist[sym], tf)
+                agg[key] = aggregate_candles(all_hist[sym], tf, base_ms=base_ms)
             pairs.append((sid, strat, sym, tf, key,
                           _pair_settings(settings, sid, scfg),
                           _pair_trade_cfg(cfg, scfg)))
@@ -1046,6 +1089,7 @@ def _build_benchmark(bench: Dict, t_start: float, dl_before: Dict, dl_after: Dic
     speedup = round(cpu / sim, 2) if (sim > 0.05 and cpu > 0) else 1.0
     return {
         "execution": execution,
+        "base": bench.get("base", "1m"),
         "workers": bench.get("workers", 1),
         "total_seconds": round(time.perf_counter() - t_start, 2),
         "data_seconds": round(bench.get("data_seconds", 0.0), 2),

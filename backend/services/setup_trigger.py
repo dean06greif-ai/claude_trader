@@ -27,6 +27,7 @@ momentum_news hat keinen Kursmuster-Detektor im Backtester; hier gilt ein
 regelbasierter Impuls-Detektor (15m-Δ%, Volumen, erste Konsolidierung) +
 optionaler News-Bezug (News-Wächter) – rein & testbar (detect_momentum_impulse).
 """
+import asyncio
 import logging
 import time
 import uuid
@@ -195,6 +196,17 @@ def detect_momentum_impulse(candles_1m: List[Dict], asset_class: str,
                      f"Volumen x{vol_ratio:.1f}, erste Konsolidierung")}
 
 
+def last_closed_5m(buf) -> Optional[int]:
+    """Zeitstempel der letzten GESCHLOSSENEN 5m-Kerze – nur aus dem Puffer-Ende,
+    gleiche Regel wie aggregate_candles(..., drop_partial=True) im vollen Lauf (rein)."""
+    from services.candles import CandleArray
+    from services.timeframes import aggregate_candles
+    if not buf:
+        return None
+    c5 = aggregate_candles(CandleArray.from_dicts(buf[-12:]), "5m", drop_partial=True)
+    return int(c5.ts[-1]) if len(c5) else None
+
+
 class SetupTrigger:
     def __init__(self):
         self.engine = None
@@ -257,6 +269,13 @@ class SetupTrigger:
         """Frische Detektor-Treffer eines Symbols (letzte geschlossene 5m-Kerze)."""
         from services import setup_asset_class as ac
         from services.setup_backtest.detectors import DETECTORS, run_detector_params
+        # 18.11.2026: Merkmale (ganzer 1m-Puffer -> 5m/15m/1h + Indikatoren) nur bauen,
+        # wenn seit dem letzten Scan eine neue 5m-Kerze geschlossen hat. Vorher alle
+        # 30 s für alle Symbole -> ~2 s blockierte Ereignisschleife je Scan.
+        buf = (getattr(self.engine.scanner, "candle_buffer", {}) or {}).get(symbol) or []
+        if len(buf) >= 600 and self._last_bar.get(symbol) is not None \
+                and last_closed_5m(buf) == self._last_bar.get(symbol):
+            return False, []
         f = self._features(symbol, asset_class)
         if f is None or f.n < 120:
             return False, []
@@ -538,7 +557,9 @@ class SetupTrigger:
         for sym in syms:
             cls = ac.asset_class_of(sym)
             try:
-                new_bar, hits = self.scan_symbol(sym, cls, classes.get(cls) or {})
+                # Rechenarbeit im Thread: die Ereignisschleife (API, Wächter) bleibt frei
+                new_bar, hits = await asyncio.to_thread(self.scan_symbol, sym, cls,
+                                                        classes.get(cls) or {})
             except Exception as e:  # noqa: BLE001
                 logger.debug(f"Setup-Trigger Scan {sym}: {e}")
                 continue

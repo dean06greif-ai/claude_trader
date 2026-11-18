@@ -174,6 +174,15 @@ async def session_status():
 
 
 # ---------------- System / RAM / Cache ----------------
+def _safe_stats(module: str, attr: str = "stats"):
+    try:
+        mod = __import__(f"services.{module}", fromlist=[attr])
+        val = getattr(mod, attr)
+        return dict(val() if callable(val) else val)
+    except Exception as e:  # noqa: BLE001
+        return {"error": str(e)[:120]}
+
+
 @router.get("/api/system/ram")
 async def system_ram():
     """RAM-Auslastung inkl. Bewertung, was viel Speicher braucht."""
@@ -213,6 +222,9 @@ async def system_ram():
             "candles": export_candles, "trades": export_trades,
             "estimated_mb": round(export_mb, 1),
         },
+        # 18.11.2026: Stundenkerzen-Stufe und Archiv-Sicherung (Kontrolle nach Deploy)
+        "hourly_cache": _safe_stats("candle_hourly"),
+        "candle_archive": _safe_stats("candle_archive", attr="STATS"),
         "breakdown_hint": {
             "kerzen_cache": f"~{round(cache_mb, 1)} MB (größter Posten bei langen Zeiträumen)",
             "backtest_export": f"~{round(export_mb, 1)} MB (Kerzen/Trades des letzten Laufs für CSV)",

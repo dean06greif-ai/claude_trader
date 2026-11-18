@@ -33,6 +33,7 @@ STALE_WARN_MIN = 10.0          # 1m-Kerzen älter als 10 min bei offenem Markt
 STALE_CRIT_MIN = 60.0
 FLOW_QUIET_H = 12              # so lange ohne KI-Trade/Schatten -> Handelsfluss prüfen
 LOOP_STALE_MIN = 45.0          # Hauptschleife ohne Lauf
+LOOP_BEAT_STALE_MIN = 20.0     # Hauptschleife ohne Herzschlag (hängt wirklich)
 FREE_MODEL_SHARE = 0.5         # Anteil Entscheidungen eines :free-Modells
 CLIENT_ERR_WARN = 3            # gleiche Fehlerquelle so oft in 24 h -> Warnung
 FAILED_JOBS_H = 24
@@ -145,11 +146,24 @@ def judge_freshness(rows: List[Dict]) -> List[Dict]:
 
 
 def judge_loop(cfg: Dict, last_run: Optional[str], analyzing: bool,
-               now: Optional[datetime] = None) -> List[Dict]:
+               now: Optional[datetime] = None, beat: Optional[str] = None) -> List[Dict]:
     if not cfg.get("enabled"):
         return [finding("ai_disabled", "hinweis", "KI-Trader", "KI-Trader ist ausgeschaltet",
                         "Es laufen keine Analysen und keine KI-Trades; Regel-Datensammlung je nach Einstellung.",
                         "Im KI-Panel einschalten, wenn er handeln und lernen soll.")]
+    # 18.11.2026: Lebenszeichen ist der Herzschlag der Schleife. Im Prüfer-Modus läuft
+    # bewusst kein Analyse-Zyklus; `last_run` ändert sich nur bei einem Detektor-Signal.
+    # Ohne Signal meldete der Arzt deshalb „Schleife läuft nicht“, obwohl sie lief.
+    beat_age = _age_min(beat, now)
+    if beat_age is not None and beat_age > LOOP_BEAT_STALE_MIN and not analyzing:
+        return [finding("ai_loop_stale", "kritisch", "KI-Trader",
+                        f"KI-Trader-Schleife hängt (seit {beat_age:.0f} min kein Durchlauf)",
+                        "Die Hauptschleife dreht sich nicht mehr: keine Signal-Prüfung, kein "
+                        "Trade-Management durch die KI und kein Lernen.",
+                        "Server-Log auf Fehler prüfen; ein Neustart des Backends startet die Schleife neu.")]
+    from services import ai_role
+    if ai_role.is_pruefer(cfg):
+        return []
     age = _age_min(last_run, now)
     limit = max(LOOP_STALE_MIN, 3 * float(cfg.get("interval_min", 10) or 10))
     if age is not None and age > limit and not analyzing:
@@ -425,7 +439,8 @@ async def run(db, engine=None, scanner=None, run_selftest: bool = True) -> Dict:
         return judge_freshness(ai_diagnosis.data_quality_rows(scanner)) if scanner is not None else []
 
     async def c_loop():
-        return judge_loop(cfg, getattr(engine, "last_run", None), bool(getattr(engine, "_analyzing", False)))
+        return judge_loop(cfg, getattr(engine, "last_run", None), bool(getattr(engine, "_analyzing", False)),
+                          beat=getattr(engine, "loop_beat", None))
 
     async def c_flow():
         if not cfg.get("enabled"):

@@ -54,7 +54,7 @@ def activity_text(cfg: Dict, analyzing: bool, next_run: Optional[str], role: Opt
     if analyzing:
         return f"Analysiert gerade den Markt – {mode}."
     nxt = ""
-    if next_run:
+    if next_run and role != "pruefer":     # Prüfer: kein Analyse-Zyklus, nur Signal-Prüfungen
         try:
             dt = datetime.fromisoformat(str(next_run).replace("Z", "+00:00"))
             from zoneinfo import ZoneInfo

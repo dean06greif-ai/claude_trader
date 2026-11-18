@@ -137,7 +137,9 @@ def test_doctor_run_stores_report_and_survives_broken_check(monkeypatch):
 def test_activity_and_reasons():
     assert "ausgeschaltet" in cockpit.activity_text({"enabled": False}, False, None, None)
     txt = cockpit.activity_text({"enabled": True}, False, "2026-11-16T10:00:00+00:00", "pruefer")
-    assert "Prüfer-Modus" in txt and "11:00" in txt
+    assert "Prüfer-Modus" in txt and "11:00" not in txt     # 18.11.: kein Analyse-Zyklus im Prüfer-Modus
+    txt = cockpit.activity_text({"enabled": True}, False, "2026-11-16T10:00:00+00:00", "trader")
+    assert "11:00" in txt
     assert "Schattentrade" in cockpit.trade_reason({"guard_shadow": {"guard": "fee_guard"}})
     assert "Lern-Trade" in cockpit.trade_reason({"signal_source": "regel"})
     s = cockpit.decision_sentence({"symbol": "BTCUSDT", "action": "LONG", "blocked_by": "Fee-Wächter: SL"})
