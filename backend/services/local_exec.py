@@ -92,10 +92,11 @@ def payload_input_hash(payload: Dict) -> str:
 
 
 # ---------------- Worker-Registry ----------------
-REQUIRED_WORKER_VERSION = (1, 32, 0)
+# 19.11.2026: 1.33.0 – Geladenes wird im Worker dauerhaft gesichert (nur Hinweis, blockiert nicht)
+REQUIRED_WORKER_VERSION = (1, 33, 0)
 # Job-IDs, die der Worker selbst erzeugt (worker.AUTO_JOB_PREFIX) – dem Server unbekannt
 WORKER_LOCAL_PREFIX = "auto-"
-REQUIRED_WORKER_VERSION_STR = "1.32.0"
+REQUIRED_WORKER_VERSION_STR = "1.33.0"
 LOST_JOB_GRACE = 20        # Sekunden nach dem Claim, bevor ein vom Worker nicht mehr
                            # gemeldeter Job als verloren gilt (Worker-Neustart)
 LOST_JOB_POLLS = 3         # ... und so viele Heartbeats in Folge ohne den Job

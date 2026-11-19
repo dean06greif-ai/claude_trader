@@ -18,6 +18,13 @@ const fmtBytes = (b) => {
 };
 const fmtTs = (ts) => fmtDate(ts);
 const fmtSpan = (a, b) => (a && b ? `${fmtTs(a)} – ${fmtTs(b)}` : '–');
+const spanDays = (a, b) => (a && b ? Math.max(Math.round((b - a) / 86400000), 0) : 0);
+// Liegt der Daten-Ordner außerhalb des Worker-Ordners? (Windows: Groß/klein egal)
+const normPath = (p) => String(p || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+const outsideWorkerDir = (dir, workerDir) => {
+  const d = normPath(dir), w = normPath(workerDir);
+  return !!(d && w && d !== w && !d.startsWith(`${w}/`));
+};
 
 
 /** Ergebnis der letzten Lücken-Reparatur (Worker ≥ 1.17.0). */
@@ -267,10 +274,10 @@ export default function LocalWorkerPanel({ onClose }) {
           <div className="lw-hint" data-testid="lw-outdated-warning"
             style={{ borderLeft: '2px solid #ffb454', paddingLeft: 8, marginTop: 6 }}>
             <b>Worker veraltet (v{worker.version} · empfohlen v{status?.required_version}).</b>{' '}
-            Der neue Kerzen-Speicher (spaltenbasiert, .npy) und die Fehlerbehandlung fehlen –
-            große Zeiträume (5400 Tage) können abstürzen. Bitte Worker beenden, das
-            aktuelle Paket herunterladen, über den alten Ordner entpacken und neu starten.
-            Deine heruntergeladenen Kerzen bleiben erhalten und werden automatisch konvertiert.{' '}
+            Neu ab v1.33: Was Optimierung und Endlossuche laden, wird dauerhaft gespeichert –
+            ältere Worker laden es nach jedem Neustart erneut. Bitte Worker beenden, das
+            aktuelle Paket herunterladen, entpacken und neu starten. Deine Kerzen und
+            Einstellungen bleiben erhalten.{' '}
             <a className="lw-btn inline" href={`${API_URL}/api/localworker/package`}
               data-testid="lw-package-download-update">
               <DownloadSimple size={13} weight="bold" /> Neues Paket laden
@@ -400,11 +407,31 @@ export default function LocalWorkerPanel({ onClose }) {
           <span className="lw-data-summary" data-testid="lw-data-summary">
             {data.dir ? ` ${data.dir} · ${fmtBytes(data.total_bytes)} belegt · ${data.disk_free_gb ?? '–'} GB frei` : ' (Worker offline – keine Daten-Info)'}
           </span>
+          {data.dir && (
+            <button className="lw-mini" style={{ marginLeft: 6 }} title="Pfad kopieren – im Explorer in die Adresszeile einfügen"
+              onClick={() => { navigator.clipboard?.writeText(data.dir).then(() => toast.success('Pfad kopiert'), () => {}); }}
+              data-testid="lw-data-dir-copy">
+              <Copy size={12} weight="bold" />
+            </button>
+          )}
         </div>
+        {outsideWorkerDir(data.dir, data.worker_dir) && (
+          <div className="lw-hint" data-testid="lw-data-dir-outside"
+            style={{ borderLeft: '2px solid #58a6ff', paddingLeft: 8, marginTop: -2 }}>
+            Die Kerzen liegen <b>nicht</b> im Worker-Ordner ({data.worker_dir}), sondern im oben genannten
+            Ordner (selbst eingetragen oder von einer früheren Installation übernommen – so muss nach einem
+            Update nichts neu geladen werden). Im Worker-Ordner
+            steht der Pfad in <span className="mono">KERZENDATEN_ORT.txt</span>. Umziehen: Ordner kopieren
+            und unter Einstellungen „Daten-Ordner für diesen Worker“ den neuen Pfad eintragen.
+          </div>
+        )}
         <div className="lw-hint" style={{ marginTop: -4 }}>
-          Gespeichert werden 1-Minuten-Kerzen – alle Timeframes werden daraus berechnet,
-          ein Download deckt also alle Timeframes ab. Backtester, Optimizer &amp; Discovery
-          nutzen vorhandene Daten automatisch (nur die neuesten Minuten werden nachgeladen).
+          Gespeichert werden 1-Minuten-Kerzen und – für 1h-Läufe, 60× kleiner – Stundenkerzen.
+          Was Backtester, Optimierung oder Endlossuche von der Börse laden, legt der Worker ab
+          v1.33 sofort hier ab: ab dem zweiten Lauf werden nur noch die neuesten Kerzen nachgeladen.
+          Vorab herunterladen lohnt nur, damit schon der erste Lauf sofort startet – dann den Zeitraum
+          des Laufs wählen (Endlossuche: 365–540 Tage). Stundenkerzen werden dabei immer für
+          mindestens 540 Tage mitgeladen.
         </div>
 
         {(dataJob || queuedData.length > 0) && (
@@ -459,11 +486,11 @@ export default function LocalWorkerPanel({ onClose }) {
 
         <table className="lw-table" data-testid="lw-data-table">
           <thead>
-            <tr><th>Coin</th><th>Kerzen (1m)</th><th>Zeitraum</th><th>Größe</th><th>Aktualisiert</th><th /></tr>
+            <tr><th>Coin</th><th>Kerzen (1m)</th><th>Zeitraum (1m)</th><th>Stunden (1h)</th><th>Größe</th><th>Aktualisiert</th><th /></tr>
           </thead>
           <tbody>
             {(data.symbols || []).length === 0 && (
-              <tr><td colSpan={6} className="lw-empty" data-testid="lw-data-empty">
+              <tr><td colSpan={7} className="lw-empty" data-testid="lw-data-empty">
                 {online ? 'Noch keine lokalen Daten – oben Coins wählen und herunterladen.' : 'Worker offline'}
               </td></tr>
             )}
@@ -472,11 +499,15 @@ export default function LocalWorkerPanel({ onClose }) {
                 <td className="mono">{s.symbol}</td>
                 <td>{s.candles ? s.candles.toLocaleString('de-DE') : '–'}</td>
                 <td>{fmtSpan(s.first_ts, s.last_ts)}</td>
-                <td>{fmtBytes(s.bytes)}</td>
+                <td title={s.h1_candles ? fmtSpan(s.h1_first_ts, s.h1_last_ts) : 'Keine Stundenkerzen gespeichert (werden bei 1h-Läufen bzw. beim Download angelegt)'}
+                  data-testid={`lw-data-h1-${s.symbol}`}>
+                  {s.h1_candles ? `${s.h1_candles.toLocaleString('de-DE')} · ${spanDays(s.h1_first_ts, s.h1_last_ts)} Tage` : '–'}
+                </td>
+                <td>{fmtBytes((s.bytes || 0) + (s.h1_bytes || 0))}</td>
                 <td>{fmtShort(s.updated)}</td>
                 <td>
                   <button className="lw-mini" onClick={() => repairSymbol(s.symbol)}
-                    disabled={!online || !!dataJob} title="Lücken reparieren: fehlende Kerzen aus Primär- und zweiter Quelle nachladen"
+                    disabled={!online || !!dataJob || !s.candles} title="Lücken reparieren: fehlende Kerzen aus Primär- und zweiter Quelle nachladen"
                     data-testid={`lw-data-repair-${s.symbol}`} style={{ marginRight: 4 }}>
                     <Wrench size={12} weight="bold" />
                   </button>

@@ -92,7 +92,7 @@ def test_revive_sets_kind_so_job_is_found_again():
 
 
 def test_required_version_and_autopilot_support():
-    assert local_exec.REQUIRED_WORKER_VERSION_STR == "1.32.0"   # 18.11.2026: Strategie-Kopien im Kind-Prozess
+    assert local_exec.REQUIRED_WORKER_VERSION_STR == "1.33.0"   # 19.11.2026: Kerzen dauerhaft im Worker
     local_exec.WORKERS["old"] = {"last_seen": time.time(), "version": "1.11.0"}
     assert local_exec.worker_supports_autopilot() is False
     local_exec.WORKERS["new"] = {"last_seen": time.time(), "version": "1.12.0"}

@@ -17,9 +17,10 @@ import gzip
 import logging
 import os
 import pickle
+import threading
 import time
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -54,6 +55,15 @@ ARCHIVE_MIN_DAYS = int(os.environ.get("CANDLE_ARCHIVE_MIN_DAYS", "30"))
 # Archiv-Stand je Symbol in diesem Prozess: Start der archivierten Historie (ms) oder None
 # (kein Archiv). Fehlt der Eintrag, ist der Stand UNBEKANNT -> nie überschreiben.
 _ARCHIVE_KNOWN: Dict[str, Optional[int]] = {}
+# 19.11.2026: Lokaler Worker – was von der Börse geladen wird, sofort auf Platte schreiben.
+# Vorher lag es nur im RAM (Platte nur beim Auslagern): nach jedem Neustart des Workers
+# (z. B. Update) lud die Endlossuche 365 Tage erneut. Auf Render aus (Platte flüchtig, dort
+# sichert das Archiv); der Worker setzt CANDLE_CACHE_SAVE_ON_FETCH=1.
+SAVE_ON_FETCH = os.environ.get("CANDLE_CACHE_SAVE_ON_FETCH", "0") == "1"
+SAVE_TAIL_MIN_MS = 24 * 3600 * 1000          # Schwanz erst nach einem Tag Zuwachs neu schreiben
+_DISK_SPAN: Dict[str, Tuple[int, int]] = {}  # symbol -> (erste, letzte) Kerze auf Platte
+_SAVE_LOCKS: Dict[str, threading.Lock] = {}
+_SAVE_LOCKS_GUARD = threading.Lock()
 
 _MEM: Dict[str, Dict] = {}  # symbol -> {"candles": CandleArray, "last_refresh", "used_at"}
 # LoopLock: der lokale Worker nutzt je Job einen eigenen Event-Loop (core/loop_lock)
@@ -94,6 +104,36 @@ def _ensure_dir():
             logger.warning(f"candle_cache: cannot create {CACHE_DIR}: {e}")
 
 
+def disk_save_due(span_on_disk: Optional[Tuple[int, int]], first_ts: int, last_ts: int,
+                  tail_min_ms: int = SAVE_TAIL_MIN_MS) -> bool:
+    """Neu auf Platte schreiben? (rein) Ja, wenn dort nichts bekannt ist, der Kopf jetzt
+    weiter zurück reicht oder der Schwanz um mindestens `tail_min_ms` gewachsen ist."""
+    if span_on_disk is None:
+        return True
+    d_first, d_last = span_on_disk
+    return int(first_ts) < int(d_first) - 60000 or int(last_ts) - int(d_last) >= tail_min_ms
+
+
+def _note_disk(symbol: str, candles: CandleArray):
+    if candles is not None and len(candles):
+        _DISK_SPAN[symbol] = (int(candles.ts[0]), int(candles.ts[-1]))
+
+
+def _save_lock(symbol: str) -> threading.Lock:
+    with _SAVE_LOCKS_GUARD:
+        return _SAVE_LOCKS.setdefault(symbol, threading.Lock())
+
+
+async def _save_if_due(symbol: str, candles: CandleArray):
+    """Worker: Geladenes sofort sichern (siehe SAVE_ON_FETCH). Fehler nur protokolliert."""
+    if not (SAVE_ON_FETCH and DISK_ENABLED) or candles is None or not len(candles):
+        return
+    if not disk_save_due(_DISK_SPAN.get(symbol), int(candles.ts[0]), int(candles.ts[-1])):
+        return
+    await asyncio.to_thread(_save_disk, symbol, candles)
+    logger.info(f"candle_cache: {symbol} auf Platte gesichert ({len(candles)} Kerzen)")
+
+
 def _load_disk(symbol: str) -> Optional[CandleArray]:
     """Lädt `<symbol>.npy`; migriert einmalig ein altes `.pkl.gz`."""
     if not DISK_ENABLED:
@@ -103,7 +143,9 @@ def _load_disk(symbol: str) -> Optional[CandleArray]:
         try:
             m = np.load(path, allow_pickle=False)
             if m.ndim == 2 and m.shape[0] and m.shape[1] >= 6:
-                return CandleArray.from_matrix(m[:, :6])
+                ca = CandleArray.from_matrix(m[:, :6])
+                _note_disk(symbol, ca)
+                return ca
             logger.warning(f"candle_cache: {path} hat unerwartete Form {m.shape}")
         except (OSError, ValueError) as e:
             logger.warning(f"candle_cache disk load failed {symbol}: {e}")
@@ -133,10 +175,13 @@ def _save_disk(symbol: str, candles: CandleArray):
         return
     _ensure_dir()
     path = _npy_path(symbol)
-    tmp = path + ".tmp.npy"
+    # eigener Temp-Name je Thread: zwei Jobs können dasselbe Symbol gleichzeitig sichern
+    tmp = f"{path}.{os.getpid()}-{threading.get_ident()}.tmp.npy"
     try:
-        np.save(tmp, candles.matrix(), allow_pickle=False)
-        os.replace(tmp, path)
+        with _save_lock(symbol):
+            np.save(tmp, candles.matrix(), allow_pickle=False)
+            os.replace(tmp, path)
+        _note_disk(symbol, candles)
         legacy = _legacy_path(symbol)
         if os.path.exists(legacy):
             try:
@@ -145,6 +190,11 @@ def _save_disk(symbol: str, candles: CandleArray):
                 pass
     except OSError as e:
         logger.warning(f"candle_cache disk save failed {symbol}: {e}")
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
 
 
 def _total_candles() -> int:
@@ -311,6 +361,7 @@ async def get_candles(session, symbol: str, days: int, job: Dict = None,
             _MEM[symbol] = {"candles": candles, "last_refresh": time.time(),
                             "used_at": time.time()}
             await _evict_if_needed_async(keep=symbol)
+        await _save_if_due(symbol, candles)
         _persist_later(symbol, len(candles))
         return candles.slice_from_ts(start)
 
@@ -373,6 +424,7 @@ async def get_candles(session, symbol: str, days: int, job: Dict = None,
         entry["last_refresh"] = now_ts
         entry["used_at"] = now_ts
         await _evict_if_needed_async(keep=symbol)
+    await _save_if_due(symbol, cached)
     _persist_later(symbol, 0)
     return cached.slice_from_ts(start)
 
@@ -557,6 +609,7 @@ def stats() -> Dict:
         "per_symbol": {k: len(v["candles"]) for k, v in _MEM.items()},
         "ram_mb": round(sum(v["candles"].nbytes() for v in _MEM.values()) / 1e6, 1),
         "disk_enabled": DISK_ENABLED,
+        "save_on_fetch": SAVE_ON_FETCH,
         "cache_dir": CACHE_DIR,
         "max_candles": MAX_CANDLES_IN_MEMORY,
     }
@@ -565,6 +618,7 @@ def stats() -> Dict:
 def clear():
     _MEM.clear()
     _ARCHIVE_KNOWN.clear()
+    _DISK_SPAN.clear()
 
 
 DOWNLOAD_STATS = {"candles": 0, "seconds": 0.0}
@@ -618,6 +672,7 @@ async def persist_symbol_async(symbol: str) -> bool:
 
 def remove_symbol(symbol: str):
     _MEM.pop(symbol, None)
+    _DISK_SPAN.pop(symbol, None)
     for path in (_npy_path(symbol), _legacy_path(symbol)):
         try:
             if os.path.exists(path):

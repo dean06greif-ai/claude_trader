@@ -6,6 +6,11 @@ strategies/*, core/*, im ZIP enthalten). Ergebnisse werden gzip-komprimiert
 zurückgeladen; bei Verbindungsabbruch rechnet der Worker weiter und lädt das
 Ergebnis nach der Wiederverbindung hoch.
 
+Neu in 1.33.0: Was Backtest, Optimierung oder Endlossuche von der Börse laden, wird
+sofort im Daten-Ordner gesichert (vorher nur im RAM -> nach jedem Neustart neu geladen).
+Downloads laden Stundenkerzen (mind. 540 Tage) mit; die Daten-Tabelle zeigt 1m und 1h,
+freien Platz und – falls der Daten-Ordner aus einer früheren Installation stammt – wo er
+liegt (zusätzlich als KERZENDATEN_ORT.txt im Worker-Ordner).
 Neu in 1.9.0: Endlos-Suche (Optimizer mode="explore") inkl. sanftem Stop
 ("stop"-Flag in der Progress-Antwort: Suche beenden, Bestes behalten).
 Neu in 1.9.2: RAM-Limit 0 = automatisch (gesamter RAM minus 1 GB), robustere
@@ -72,7 +77,7 @@ import time
 import uuid
 from pathlib import Path
 
-VERSION = "1.32.0"
+VERSION = "1.33.0"
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = SCRIPT_DIR / "worker_config.json"
 # Zweiter Speicherort im Benutzerordner: überlebt das Neu-Entpacken des Pakets
@@ -157,9 +162,44 @@ def load_config():
     return cfg
 
 
+def data_dir_note(data_dir, script_dir):
+    """Erklärung, wenn der Daten-Ordner NICHT im Worker-Ordner liegt (rein, testbar).
+    Der Pfad wird im Benutzerordner gemerkt, damit ein neu entpacktes Paket die
+    vorhandenen Kerzen weiter nutzt – im neuen Ordner fehlt dann aber „worker_data“."""
+    def norm(p):
+        return str(p or "").replace("\\", "/").rstrip("/").lower()
+    d, s = norm(data_dir), norm(script_dir)
+    if not d or not s or d == s or d.startswith(s + "/"):
+        return None
+    return ("Die Kerzendaten dieses Workers liegen in:\n"
+            f"{data_dir}\n\n"
+            "Er liegt außerhalb des Worker-Ordners: selbst eingetragen oder von einer früheren "
+            "Installation übernommen – so muss nach einem Update nichts neu geladen werden.\n"
+            "Ändern: Website → Lokal → Verwalten → „Daten-Ordner für diesen Worker“ "
+            "(vorher den Ordner dorthin kopieren, sonst wird neu geladen).\n")
+
+
+DATA_HINT_FILE = SCRIPT_DIR / "KERZENDATEN_ORT.txt"
+
+
+def write_data_dir_hint():
+    """Hinweis-Datei im Worker-Ordner pflegen (nur wenn die Daten woanders liegen)."""
+    note = data_dir_note(CONFIG.get("data_dir"), SCRIPT_DIR)
+    try:
+        if note:
+            DATA_HINT_FILE.write_text(note, encoding="utf-8")
+        elif DATA_HINT_FILE.exists():
+            DATA_HINT_FILE.unlink()
+    except OSError:
+        pass
+    return note
+
+
 CONFIG = load_config()
 os.environ.setdefault("CANDLE_CACHE_DISK", "1")
 os.environ.setdefault("CANDLE_CACHE_DIR", CONFIG["data_dir"])
+# 1.33.0: Geladenes sofort sichern (services/candle_cache.SAVE_ON_FETCH)
+os.environ.setdefault("CANDLE_CACHE_SAVE_ON_FETCH", "1")
 os.makedirs(CONFIG["data_dir"], exist_ok=True)
 
 import requests  # noqa: E402
@@ -278,6 +318,7 @@ def apply_settings(settings):
             return
         CONFIG["data_dir"] = new_dir
         save_config(CONFIG)
+        write_data_dir_hint()
         os.environ["CANDLE_CACHE_DIR"] = new_dir
         if not RUNNING:
             try:
@@ -606,6 +647,28 @@ def run_ai_seed_job(job_id, payload):
 
 
 # ---------------- Daten-Jobs ----------------
+# Stundenkerzen sind winzig (540 Tage ≈ 13.000 Kerzen ≈ 13 Abrufe, ~600 KB je Coin): immer
+# so viel mitladen, dass Optimierung und Endlossuche auf 1h (365–540 Tage) nichts nachladen.
+HOURLY_MIN_DAYS = 540
+
+
+async def _download_hourly(session, jobd, sym, days):
+    """Stundenkerzen zum 1m-Download dazu (nur Coins mit nativer 1h-Quelle; andere bauen
+    1h aus den 1m-Kerzen). Ein Fehler hier bricht den 1m-Download nicht ab."""
+    from services import candle_hourly
+    if not candle_hourly.supported(sym):
+        return 0
+    jobd["phase"] = f"Lade {sym} Stundenkerzen ({max(int(days), HOURLY_MIN_DAYS)} Tage)..."
+    try:
+        h = await candle_hourly.get_hourly(session, sym, max(int(days), HOURLY_MIN_DAYS), job=jobd)
+        return len(h)
+    except Exception as e:  # noqa: BLE001
+        if type(e).__name__ in ("JobCancelled", "JobCancelledLocal"):
+            raise
+        log(f"Stundenkerzen {sym} nicht geladen: {short_error(e)}")
+        return 0
+
+
 async def _download_symbols(jobd, symbols, days):
     import aiohttp
     from services import candle_cache
@@ -618,7 +681,8 @@ async def _download_symbols(jobd, symbols, days):
             jobd["progress"] = round(i / max(len(symbols), 1) * 100)
             candles = await candle_cache.get_candles(session, sym, days, job=jobd)
             await candle_cache.persist_symbol_async(sym)
-            done.append({"symbol": sym, "candles": len(candles)})
+            hourly = await _download_hourly(session, jobd, sym, days)
+            done.append({"symbol": sym, "candles": len(candles), "hourly": hourly})
     return done
 
 
@@ -640,7 +704,9 @@ def run_data_job(job_id, kind, params):
             updated, skipped = _update_all_symbols(jobd)
             summary = {"symbols": updated, "skipped": skipped}
         elif kind == "data_delete":
+            from services import candle_hourly
             candle_cache.remove_symbol(params.get("symbol"))
+            candle_hourly.remove_symbol(params.get("symbol"))
             summary = {"symbol": params.get("symbol")}
         elif kind == "data_repair":
             async def _repair():
@@ -737,20 +803,53 @@ def resources():
 
 
 
-def data_info():
+def disk_free_gb(path):
     try:
-        from services import candle_cache
-        syms = candle_cache.list_disk_symbols()
-        detail = []
-        for s in syms[:200]:
-            key = (s.get("symbol"), s.get("mtime"))
-            if key not in _META_CACHE:   # nur bei geänderter Datei neu lesen (Poll alle 2 s)
-                _META_CACHE[key] = candle_cache.disk_meta(s.get("symbol")) or {}
-            detail.append({**s, **_META_CACHE[key]})
-        return {"symbols": [s.get("symbol") for s in syms], "detail": detail,
-                "data_dir": CONFIG.get("data_dir")}
+        import shutil
+        return round(shutil.disk_usage(path).free / 1e9, 1)
+    except (OSError, ValueError):
+        return None
+
+
+def merge_data_rows(rows_1m, rows_1h):
+    """1m- und 1h-Dateien je Symbol zu EINER Tabellenzeile (rein, testbar). 1h-Felder
+    heißen h1_*; ein Symbol nur mit Stundenkerzen erscheint ebenfalls (vorher unsichtbar)."""
+    out = {}
+    for r in rows_1m:
+        out[r["symbol"]] = dict(r)
+    for r in rows_1h:
+        row = out.setdefault(r["symbol"], {"symbol": r["symbol"], "bytes": 0})
+        for k in ("candles", "first_ts", "last_ts"):
+            if r.get(k) is not None:
+                row["h1_" + k] = r[k]
+        row["h1_bytes"] = int(r.get("bytes") or 0)
+        row["mtime"] = max(float(row.get("mtime") or 0), float(r.get("mtime") or 0)) or None
+    return [out[k] for k in sorted(out)]
+
+
+def data_info():
+    global _META_CACHE
+    try:
+        from services import candle_cache, candle_hourly
+        cache = {}
+
+        def meta(tier, s, fn):
+            key = (tier, s.get("symbol"), s.get("mtime"))
+            # nur bei geänderter Datei neu lesen (Poll alle 2 s)
+            cache[key] = _META_CACHE[key] if key in _META_CACHE else (fn(s.get("symbol")) or {})
+            return {**s, **cache[key]}
+
+        rows_1m = [meta("1m", s, candle_cache.disk_meta) for s in candle_cache.list_disk_symbols()[:300]]
+        rows_1h = [meta("1h", s, candle_hourly.disk_meta) for s in candle_hourly.list_disk_symbols()[:300]]
+        _META_CACHE = cache
+        detail = merge_data_rows(rows_1m, rows_1h)
+        return {"symbols": [r["symbol"] for r in detail], "detail": detail,
+                "data_dir": CONFIG.get("data_dir"), "worker_dir": str(SCRIPT_DIR),
+                "total_bytes": sum(int(r.get("bytes") or 0) + int(r.get("h1_bytes") or 0)
+                                   for r in detail),
+                "disk_free_gb": disk_free_gb(CONFIG.get("data_dir"))}
     except Exception:  # noqa: BLE001
-        return {"symbols": [], "data_dir": CONFIG.get("data_dir")}
+        return {"symbols": [], "data_dir": CONFIG.get("data_dir"), "worker_dir": str(SCRIPT_DIR)}
 
 
 def cleanup_finished():
@@ -824,6 +923,9 @@ def maybe_auto_update():
 def main():
     log(f"Lokaler Worker v{VERSION} · Server: {CONFIG['server_url']}")
     log(f"Daten-Ordner: {CONFIG['data_dir']}")
+    if write_data_dir_hint():
+        log("  (liegt außerhalb dieses Worker-Ordners – eigener Pfad oder von einer früheren "
+            "Installation übernommen; der Pfad steht auch in KERZENDATEN_ORT.txt)")
     if keep_awake():
         log("Standby-Schutz aktiv: Windows geht nicht in den Leerlauf-Standby, solange dieses "
             "Fenster offen ist (Deckel zuklappen bitte in den Energieoptionen auf "

@@ -18,7 +18,7 @@ import asyncio
 import logging
 import os
 import time
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 
@@ -300,6 +300,48 @@ async def get_hourly(session, symbol: str, days: int, job: Dict = None,
         except Exception as e:  # noqa: BLE001
             logger.warning(f"candle_hourly: sichern {symbol}: {e}")
     return cached.slice_from_ts(start)
+
+
+def disk_meta(symbol: str) -> Optional[Dict]:
+    """Anzahl/erste/letzte Stunde direkt von Platte (ohne die Daten in den RAM zu holen)."""
+    p = _disk_path(symbol)
+    if not os.path.exists(p):
+        return None
+    try:
+        m = np.load(p, mmap_mode="r", allow_pickle=False)
+        if m.ndim != 2 or not m.shape[0]:
+            return None
+        return {"candles": int(m.shape[0]), "first_ts": int(m[0, 0]), "last_ts": int(m[-1, 0])}
+    except (OSError, ValueError):
+        return None
+
+
+def list_disk_symbols() -> List[Dict]:
+    """Auf Platte gespeicherte Stundenkerzen (für die Daten-Tabelle des Workers)."""
+    from services import candle_cache
+    d = os.path.join(candle_cache.CACHE_DIR, "h1")
+    if not os.path.isdir(d):
+        return []
+    out = []
+    for fn in sorted(os.listdir(d)):
+        if not fn.endswith(".npy") or fn.endswith(".tmp.npy"):
+            continue
+        p = os.path.join(d, fn)
+        try:
+            out.append({"symbol": fn[:-4], "bytes": os.path.getsize(p), "mtime": os.path.getmtime(p)})
+        except OSError:
+            continue
+    return out
+
+
+def remove_symbol(symbol: str):
+    _MEM.pop(symbol, None)
+    p = _disk_path(symbol)
+    try:
+        if os.path.exists(p):
+            os.remove(p)
+    except OSError as e:
+        logger.warning(f"candle_hourly: löschen {symbol}: {e}")
 
 
 def stats() -> Dict:
