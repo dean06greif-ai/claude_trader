@@ -605,3 +605,15 @@ Details: `docs/ZUSAMMENSPIEL_2026-11-17.md`.
 - **Mehrere Nutzer:** `services/job_ownership.py`; `/api/{optimizer,backtest}/active?mine=…` zeigt den eigenen Lauf (+ `others`), `/reset` mit `job_id` nur diesen, sonst nur hängende (`local_exec.job_is_stale`). Frontend: `lib/myJobs.js`.
 - **Worker-Panel:** Auswahl des angezeigten Workers, Daten-Aufträge an ihn, „Weiteren Worker verbinden“, unterscheidbare Namen (`workerLabel`).
 - **Optimizer:** „Empfohlene Einstellungen“ setzen alle Felder der Endlos-Suche (inkl. Zusatz-Filter aus, 24/7, keine Basis-Strategie).
+
+## Kerzen im Worker dauerhaft, ML-Labor ohne Loop-Blockade (19.11.2026, zwölftes Paket)
+- `candle_cache`: `SAVE_ON_FETCH` (Worker setzt `CANDLE_CACHE_SAVE_ON_FETCH=1`) – geladene
+  1m-Kerzen sofort auf Platte (`disk_save_due`: nichts gespeichert, Kopf gewachsen oder ≥ 1 Tag
+  Schwanz); eigene Temp-Datei je Thread. Render unverändert.
+- Worker 1.33.0: Download lädt Stundenkerzen (mind. 540 Tage); Löschen entfernt auch 1h;
+  `data_info` mit 1h-Zeilen, `disk_free_gb`, `worker_dir`; `KERZENDATEN_ORT.txt` + Startlog, wenn
+  der Daten-Ordner außerhalb des Worker-Ordners liegt. Panel: Spalte „Stunden (1h)“, Pfad kopieren.
+- `ai_ml_lab`: `SnapshotIndex` (bisect, identische Auswahl inkl. Gleichstand) und
+  `build_dataset` per `asyncio.to_thread`.
+- Tests: `test_worker_data_persist_1911.py`, `test_ml_lab_snapshot_index_1911.py`.
+

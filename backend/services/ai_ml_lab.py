@@ -17,7 +17,9 @@ es zu wenige Daten, meldet der Status das sauber – die Plattform läuft
 unverändert weiter. Das Training läuft in einem Thread (asyncio.to_thread),
 damit der Event-Loop nie blockiert.
 """
+import asyncio
 import base64
+import bisect
 import logging
 import os
 import time
@@ -137,6 +139,42 @@ def nearest_snapshot(snaps: List[Dict], target: datetime,
     return best
 
 
+def _utc(ts: datetime) -> datetime:
+    return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
+
+
+class SnapshotIndex:
+    """Snapshots eines Coins einmal geparst und nach Zeit sortiert (19.11.2026).
+
+    Gleiches Ergebnis wie ``nearest_snapshot(snaps, target)`` (ohne Zukunft): der jüngste
+    Snapshot mit ts <= target, bei gleichem Zeitstempel der erste in der ursprünglichen
+    Reihenfolge. Vorher lief für JEDE Entscheidung eine lineare Suche mit erneutem
+    Zeit-Parsen über alle Snapshots des Coins – das Auto-Training hielt so alle ~30 min
+    den Event-Loop 4–5 s an (Produktion, loop-health)."""
+
+    def __init__(self, snaps: List[Dict]):
+        rows = []
+        for i, s in enumerate(snaps or []):
+            ts = _ts(s.get("ts"))
+            if ts:
+                rows.append((_utc(ts), i, s))
+        rows.sort(key=lambda r: (r[0], r[1]))
+        self._ts = [r[0] for r in rows]
+        self._docs = [r[2] for r in rows]
+
+    def nearest(self, target: datetime, max_gap_min: int = 45) -> Optional[Dict]:
+        target = _utc(target)
+        pos = bisect.bisect_right(self._ts, target) - 1
+        if pos < 0:
+            return None
+        t = self._ts[pos]
+        while pos > 0 and self._ts[pos - 1] == t:      # gleiche Zeit: erster in Originalreihenfolge
+            pos -= 1
+        if (target - t).total_seconds() > max_gap_min * 60:
+            return None
+        return self._docs[pos]
+
+
 def temporal_folds(n: int, n_folds: int = 5, min_train: int = 20,
                    min_test: int = 8) -> List[Tuple[List[int], List[int]]]:
     """Expanding-Window-Folds über zeitlich SORTIERTE Indizes (Audit 2.2):
@@ -193,6 +231,7 @@ def build_dataset(decisions: List[Dict],
     by_symbol: Dict[str, List[Dict]] = {}
     for s in snapshots or []:
         by_symbol.setdefault(s.get("symbol"), []).append(s)
+    index = {sym: SnapshotIndex(lst) for sym, lst in by_symbol.items()}
     X: List[Dict] = []
     y: List[int] = []
     tss: List[Optional[datetime]] = []
@@ -205,7 +244,8 @@ def build_dataset(decisions: List[Dict],
         if action not in ("LONG", "SHORT"):
             continue
         ts = _ts(d.get("ts") or d.get("timestamp"))
-        snap = nearest_snapshot(by_symbol.get(d.get("symbol")) or [], ts) if ts else None
+        idx = index.get(d.get("symbol"))
+        snap = idx.nearest(ts) if ts and idx is not None else None
         if snap:
             matched += 1
         X.append(feature_row(d, snap))
@@ -478,7 +518,9 @@ class MLLab:
             {"ts": {"$gte": cutoff}},
             projection={"_id": 0, "symbol": 1, "ts": 1, "features": 1}) \
             .sort("ts", -1).limit(30000).to_list(30000)
-        X, y, tss, meta = build_dataset(list(decisions) + list(signals), snapshots)
+        # reine Rechnung in einen Thread: hält den Event-Loop nicht an (19.11.2026)
+        X, y, tss, meta = await asyncio.to_thread(build_dataset, list(decisions) + list(signals),
+                                                  snapshots)
         meta["source"] = {"ai_decisions": len(decisions), "signals": len(signals),
                           "snapshots": len(snapshots)}
         return X, y, tss, meta

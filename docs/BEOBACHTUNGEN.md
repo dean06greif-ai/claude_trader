@@ -4,6 +4,36 @@ Geführt von den automatischen Pflege-Läufen (geplante Aufgabe „Krypto-Websit
 Hand. Neueste Einträge oben. Einträge älter als 6 Wochen werden zu einer kurzen
 Zusammenfassung verdichtet.
 
+## 2026-11-19 (von Hand – Kerzen im Worker, Pflege-Zugriff)
+
+**Befunde (Produktion, nur lesend – erstmals direkt aus der Sandbox per curl):**
+- Pflege-Skill: Der Trader hat die beiden Render-Domains in der Netzwerk-Freigabe erlaubt. Alle
+  11 GET-Endpunkte des Skills antworten mit 200 (vorher „Produktion nicht lesbar“).
+- Worker ANTON-PC: Daten-Ordner `C:\anton2\Crypto\krypto_local_worker\worker_data` (aus dem
+  Benutzerordner der früheren Installation übernommen), der neue Worker liegt in
+  `C:\anton2\Crypto_Claude\…` – dort fehlt „worker_data“, die Daten liegen im alten Ordner.
+- Beide Downloads heute (11:06 und 11:11) liefen mit **7 Tagen** für alle 25 Coins. Die
+  Endlossuche braucht 365–540 Tage und lud den Rest nach – und behielt ihn nur im RAM: geladene
+  1m-Kerzen kamen nur beim Auslagern auf die Platte. Nach jedem Worker-Neustart (Update) lud sie
+  erneut (HYPE kommt von Bitunix, nur als 1m – besonders langsam).
+- Event-Loop: 37 Blockaden, max. 31 s; seit gestern alle ~32 min 4–5 s im Auto-Training des
+  ML-Labors (`build_dataset` → lineare Snapshot-Suche je Entscheidung, 6.000 × ~1.200 Zeit-Parses).
+  Einzelne: `run_deep_analysis` (2–7 s), `smc_zones.zones_text` (2,4 s).
+
+**Geändert (deployt):**
+- Worker 1.33.0: Was Backtest/Optimierung/Endlossuche von der Börse laden, wird sofort im
+  Daten-Ordner gesichert (neu, Kopf, ≥ 1 Tag Schwanz; nur Worker, Render unverändert). Downloads
+  laden Stundenkerzen für mind. 540 Tage mit. Tabelle: Spalte „Stunden (1h)“, freier Platz,
+  Pfad kopieren, Hinweis bei Ordner außerhalb des Worker-Ordners (+ `KERZENDATEN_ORT.txt`).
+  Empfohlene Version 1.33.0 (nur Hinweis).
+- ML-Labor: sortierter Snapshot-Index (gleiche Auswahl, Test gegen die alte Suche),
+  Datensatz-Aufbau im Thread – 6.000 × 30.000 jetzt ~0,2 s statt 4–5 s auf dem Loop.
+
+**Offen / nächster Lauf:**
+- Beide Worker auf 1.33.0 aktualisieren; danach prüfen, ob die zweite Endlossuche ohne Laden
+  startet (Tabelle: 1m-Zeitraum wächst auf 365+ Tage, 1h-Spalte gefüllt).
+- `run_deep_analysis` und `smc_zones.zones_text` blockieren gelegentlich 2–7 s – beobachten.
+
 ## 2026-11-18 (spät, von Hand – zwei Nutzer, zwei Worker)
 
 **Befunde (Produktion, nur lesend):**
